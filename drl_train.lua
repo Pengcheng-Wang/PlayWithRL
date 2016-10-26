@@ -174,7 +174,7 @@ else
     elseif opt.model == 'rnn' then
         protos.rnn = RNN.rnn(state_feature_size, action_size, opt.rnn_size, opt.num_layers, opt.dropout)
     end
-    protos.criterion = nn.ClassNLLCriterion()   -- It seems like the dqn program does not use a standard criterion module. If it is needed, it should be sth like MSECriterioin.
+--    protos.criterion = nn.ClassNLLCriterion()   -- It seems like the dqn program does not use a standard criterion module. If it is needed, it should be sth like MSECriterioin.
 end
 
 -- the initial state of the cell/hidden states
@@ -243,8 +243,8 @@ end
 -- preprocessing helper function, both params should be of type torch.Tensor
 -- Before prepro, both x and y are 2-dim tensors, in which one row contains one sentence, whose length is seq_length, and row # is batch_size.
 function prepro(x,y)
-    x = x:transpose(1,2):contiguous() -- swap the axes for faster indexing
-    y = y:transpose(1,2):contiguous() -- here, x and y should be of type torch.Tensor
+--    x = x:transpose(1,2):contiguous() -- swap the axes for faster indexing
+--    y = y:transpose(1,2):contiguous() -- here, x and y should be of type torch.Tensor
     if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
         x = x:float():cuda()
@@ -300,6 +300,10 @@ function set_target_q_network()
     target_protos = {}
     for k, v in pairs(protos) do
         target_protos[k] = v:clone()
+        if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
+            -- have to convert to float because integers can't be cuda()'d
+            target_protos[k]:cuda()
+        end
     end
 end
 
@@ -319,6 +323,11 @@ function feval(network_param)
 --    -- print('*** before prepro(), size of x is ', x:size())
 --    x,y = prepro(x,y)   -- this prepro() transpose the tensor of both x and y, exchange their 1st and 2nd dimension.
 --    -- print('*** after prepro(), size of x is  ', x:size())  -- after prepro(), row # is # of seq length, column # is batch_size
+    if opt.gpuid >= 0 and opt.opencl == 0 then
+        rl_states, rl_actions = prepro(rl_states, rl_actions)
+        rl_rewards, rl_terminals = prepro(rl_rewards, rl_terminals)
+    end
+
     ------------------- forward pass -------------------
     local rnn_state = {[0] = init_state_global }
     rnn_state[rl_max_traj_length+1] = init_state
@@ -478,3 +487,22 @@ for i = 1, iterations do
 --        break -- halt
 --    end
 end
+
+
+--local rnn_state = {[0] = init_state_global }
+--local predictions = {}
+--rnn_state[rl_max_traj_length+1] = init_state
+--for t=1,rl_max_traj_length do
+--    protos.rnn:evaluate() -- make sure we are in correct mode (this is cheap, sets flag)
+--    local lst = protos.rnn:forward{rl_states[t], unpack(rnn_state[t-1])}   -- rl_states[t] is a batch of inputs (state in the rl problem). rnn_state[t-1] is a batch of hidden states (including cell states in lstm) values from the previous time step
+--    rnn_state[t] = {}
+--    for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output.--#init_size returns the # of hidden states(including cell states in lstm) in this rnn network. lst[i] has batch_size # of rows and hidden neuron # of columns.
+--    predictions[t] = lst[#lst] -- last element is the prediction
+--end
+--
+--local trj_ind = 4
+--for i=1, rl_max_traj_length do
+--    print('At time', i, 'when state is', rl_states[i][trj_ind], 'Q values are', predictions[i][trj_ind])
+--end
+
+
