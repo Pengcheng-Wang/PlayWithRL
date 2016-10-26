@@ -1,6 +1,6 @@
 local RNN = {}
 
-function RNN.rnn(input_size, rnn_size, n, dropout)    -- rnn_size is the number of hidden neurons in one rnn hidden layer. n is the number of hidden layers. input_size is vocabulary size.
+function RNN.rnn(input_size, output_size, rnn_size, n, dropout)    -- rnn_size is the number of hidden neurons in one rnn hidden layer. n is the number of hidden layers. input_size is vocabulary size.
 
   -- there are n+1 inputs (hiddens on each layer and x)
   local inputs = {}
@@ -16,9 +16,9 @@ function RNN.rnn(input_size, rnn_size, n, dropout)    -- rnn_size is the number 
   local outputs = {}
   for L = 1,n do
 
-    local prev_h = inputs[L+1]
+    local prev_h = inputs[L+1]  -- inputs[1] is the real input, others, like inputs[2] ... are hidden states
     if L == 1 then
-      x = OneHot(input_size)(inputs[1])     -- after OneHot()(), x becomes a 2-dim tensor, each row of which represent a OneHot representation of a sigle character, and # of rows equal to batch size.
+      x = inputs[1]     -- input[1] should be a 2-dim tensor, each row of which represent a sigle state, and # of rows equal to batch size.
       input_size_L = input_size
     else
       x = outputs[(L-1)]
@@ -36,9 +36,9 @@ function RNN.rnn(input_size, rnn_size, n, dropout)    -- rnn_size is the number 
 -- set up the decoder
   local top_h = outputs[#outputs]
   if dropout > 0 then top_h = nn.Dropout(dropout)(top_h) end
-  local proj = nn.Linear(rnn_size, input_size)(top_h)
-  local logsoft = nn.LogSoftMax()(proj)
-  table.insert(outputs, logsoft)
+  local proj = nn.Linear(rnn_size, output_size)(top_h)
+--  local logsoft = nn.LogSoftMax()(proj) -- Todo: pwang8. The RL problem does not need a logsoft layer at the end. Take a look at the structure of dqn, and also modify lstm, gru code
+  table.insert(outputs, proj)
 
   return nn.gModule(inputs, outputs)    -- the nn.gModule() returns a module with standard API of forward() and backward()
 end

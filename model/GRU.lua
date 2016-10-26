@@ -5,7 +5,7 @@ local GRU = {}
 Creates one timestep of one GRU
 Paper reference: http://arxiv.org/pdf/1412.3555v1.pdf
 ]]--
-function GRU.gru(input_size, rnn_size, n, dropout) -- input_size: vocab_size. rnn_size: hidden neuron quantity in one layer. n: num of hidden layers.
+function GRU.gru(input_size, output_size, rnn_size, n, dropout) -- input_size: vocab_size. rnn_size: hidden neuron quantity in one layer. n: num of hidden layers.
   dropout = dropout or 0 
   -- there are n+1 inputs (hiddens on each layer and x)
   local inputs = {}
@@ -27,7 +27,7 @@ function GRU.gru(input_size, rnn_size, n, dropout) -- input_size: vocab_size. rn
     local prev_h = inputs[L+1]
     -- the input to this layer
     if L == 1 then 
-      x = OneHot(input_size)(inputs[1])
+      x = inputs[1]
       input_size_L = input_size
     else 
       x = outputs[(L-1)] 
@@ -53,9 +53,9 @@ function GRU.gru(input_size, rnn_size, n, dropout) -- input_size: vocab_size. rn
 -- set up the decoder
   local top_h = outputs[#outputs]
   if dropout > 0 then top_h = nn.Dropout(dropout)(top_h) end
-  local proj = nn.Linear(rnn_size, input_size)(top_h)
-  local logsoft = nn.LogSoftMax()(proj)
-  table.insert(outputs, logsoft)
+  local proj = nn.Linear(rnn_size, output_size)(top_h)
+--  local logsoft = nn.LogSoftMax()(proj)
+  table.insert(outputs, proj)
 
   return nn.gModule(inputs, outputs)
 end
