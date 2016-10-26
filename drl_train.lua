@@ -350,7 +350,7 @@ function feval(network_param)
         local target_Q_value = target_Q_max:clone():mul(rl_discount):cmul(one_minus_terminal)
         local delta = rl_rewards[t]:clone()     -- Todo: pwang8. Check if the index is correct in real application.
         delta:add(target_Q_value)
-        local current_Q = torch.Tensor(predictions[t]:size(1))     -- It should be the size of batch_size
+        local current_Q = torch.FloatTensor(predictions[t]:size(1))     -- It should be the size of batch_size
         for i=1, predictions[t]:size(1) do
             current_Q[i] = predictions[t][i][rl_actions[t][i]]
         end
