@@ -351,6 +351,10 @@ function feval(network_param)
         local delta = rl_rewards[t]:clone()     -- Todo: pwang8. Check if the index is correct in real application.
         delta:add(target_Q_value)
         local current_Q = torch.FloatTensor(predictions[t]:size(1))     -- It should be the size of batch_size
+        if opt.gpuid >= 0 and opt.opencl == 0 then
+            current_Q:float():cuda()
+        end
+
         for i=1, predictions[t]:size(1) do
             current_Q[i] = predictions[t][i][rl_actions[t][i]]
         end
