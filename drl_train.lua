@@ -125,6 +125,22 @@ rl_terminals = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0},
 --rl_rewards = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, 100)/100.0
 --rl_terminals = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size):random(0, 1)  -- The +1 has the same meaning as it is for rl_states
 
+-- We also need a preprocessing here. The difference is that, their char_rnn input for each sequence at each time step is one integer (char index),
+-- but ours should be a tensor.
+-- Todo: pwang8. on Oct20. Change the preprocessing.
+-- preprocessing helper function, both params should be of type torch.Tensor
+-- Before prepro, both x and y are 2-dim tensors, in which one row contains one sentence, whose length is seq_length, and row # is batch_size.
+-- The current prepro() only move the two params onto gpu memory. Transpose will not be used.
+function prepro(x)
+    if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
+    -- have to convert to float because integers can't be cuda()'d
+    x = x:float():cuda()
+    elseif opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
+    x = x:cl()
+    end
+    return x
+end
+
 -- When we are going to use a large dataset of training trajectories, this prepro() should be invoked in feval()
 if opt.gpuid >= 0 and opt.opencl == 0 then
     rl_states = prepro(rl_states)
@@ -228,22 +244,6 @@ end
 --for k, v in pairs(clones) do
 --    print("In clones table, there exists key: ", k, ', value:', v)
 --end
-
--- We also need a preprocessing here. The difference is that, their char_rnn input for each sequence at each time step is one integer (char index),
--- but ours should be a tensor.
--- Todo: pwang8. on Oct20. Change the preprocessing.
--- preprocessing helper function, both params should be of type torch.Tensor
--- Before prepro, both x and y are 2-dim tensors, in which one row contains one sentence, whose length is seq_length, and row # is batch_size.
--- The current prepro() only move the two params onto gpu memory. Transpose will not be used.
-function prepro(x)
-    if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
-        -- have to convert to float because integers can't be cuda()'d
-        x = x:float():cuda()
-    elseif opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
-        x = x:cl()
-    end
-    return x
-end
 
 
 --- Set up target q network
