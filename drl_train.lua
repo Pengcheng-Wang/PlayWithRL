@@ -53,6 +53,8 @@ cmd:option('-accurate_gpu_timing',0,'set this flag to 1 to get precise timings w
 -- GPU/CPU
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-opencl',0,'use OpenCL (instead of CUDA)')
+-- RL optimization tricks
+cmd:option('-target_q',1,'set value to 1 is a seperated target Q function is used in training.')
 cmd:text()
 
 -- parse input params
@@ -106,20 +108,31 @@ local state_feature_size = 4    -- the dim of input feature set
 local action_size = 4   -- output size, should be the # of actions in this rl framework
 
 --- I'm creating a bunch of data here. The data should include information of state, action, instant reward, and terminal, just as it is in the dqn program.
-local rl_batch_data_size = 5    -- in total, 200 trajectories.
+local rl_batch_data_size = 80    -- in total, 200 trajectories.
 local rl_max_traj_length = 5   -- max length of transitions in one trajectory
 local rl_discount = 0.9
 -- For all the following defined rl tensors, the 1st dim is always time index.
 -- The tensor rl_states, 1st dim is time index, 2nd is entity index in one batch, 3rd dim is state feature index
-rl_states = torch.Tensor{ {{1,0,1,0},{1,1,0,0},{1,1,0,0},{1,1,0,0},{1,0,0,0}},
+rl_states_seed = torch.Tensor{ {{1,0,1,0},{1,1,0,0},{1,1,0,0},{1,1,0,0},{1,0,0,0}},
     {{0,1,1,1},{1,0,0,0},{1,0,0,1},{1,0,0,0},{1,0,0,0}},
     {{0,0,0,0},{1,1,0,0},{0,1,1,1},{0,1,1,1},{1,1,0,0}},
     {{0,0,0,0},{1,0,0,1},{0,0,0,0},{0,0,0,0},{1,0,1,0}},
     {{0,0,0,0},{0,1,1,1},{0,0,0,0},{0,0,0,0},{0,1,1,1}},
     {{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0}} }     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
-rl_actions = torch.Tensor{ {2,4,4,4,1}, {1,4,2,2,3}, {1,4,1,1,3}, {1,2,1,1,2}, {1,1,1,1,1} }
-rl_rewards = torch.Tensor{ {0,0,0,0,0}, {-1,0,0,0,0}, {0,0,-1,1,0}, {0,0,0,0,0}, {0,-1,0,0,-1} }
-rl_terminals = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0}, {1,1,1,1,1}, {1,1,1,1,1} }
+rl_actions_seed = torch.Tensor{ {2,4,4,4,1}, {1,4,2,2,3}, {1,4,1,1,3}, {1,2,1,1,2}, {1,1,1,1,1} }
+rl_rewards_seed = torch.Tensor{ {0,0,0,0,0}, {-1,0,0,0,0}, {0,0,-1,1,0}, {0,0,0,0,0}, {0,-1,0,0,-1} }
+rl_terminals_seed = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0}, {1,1,1,1,1}, {1,1,1,1,1} }
+for i=1,4 do
+    rl_states_seed = torch.cat(rl_states_seed, rl_states_seed, 2)
+    rl_actions_seed = torch.cat(rl_actions_seed, rl_actions_seed, 2)
+    rl_rewards_seed = torch.cat(rl_rewards_seed, rl_rewards_seed, 2)
+    rl_terminals_seed = torch.cat(rl_terminals_seed, rl_terminals_seed, 2)
+end
+rl_states = rl_states_seed
+rl_actions = rl_actions_seed
+rl_rewards = rl_rewards_seed
+rl_terminals = rl_terminals_seed
+print('Size of rl_states:', rl_states:size())
 --rl_states = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size, state_feature_size):random(1, 100)/100.0     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
 --rl_actions = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, action_size)
 --rl_rewards = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, 100)/100.0
@@ -250,13 +263,17 @@ end
 target_protos = {}
 
 function set_target_q_network()
-    target_protos = {}
-    for k, v in pairs(protos) do
-        target_protos[k] = v:clone()
-        if opt.gpuid >= 0 and opt.opencl == 0 then
-            target_protos[k]:cuda()
-        elseif opt.gpuid >=0 and opt.opencl == 1 then
-            target_protos[k]:cl()
+    if opt.target_q == 0 then
+        target_protos = protos
+    else
+        target_protos = {}
+        for k, v in pairs(protos) do
+            target_protos[k] = v:clone()
+            if opt.gpuid >= 0 and opt.opencl == 0 then
+                target_protos[k]:cuda()
+            elseif opt.gpuid >=0 and opt.opencl == 1 then
+                target_protos[k]:cl()
+            end
         end
     end
 end
