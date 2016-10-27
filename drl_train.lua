@@ -1,15 +1,9 @@
 
 --[[
 
-This file trains a character-level multi-layer RNN on text data
-
-Code is based on implementation in
-https://github.com/oxford-cs-ml-2015/practical6
-but modified to have multi-layer support, GPU support, as well as
-many other common model/optimization bells and whistles.
-The practical6 code is in turn based on
-https://github.com/wojciechz/learning_to_execute
-which is turn based on other stuff in Torch, etc... (long lineage)
+This is the script I used to train a RNN based Q-learning network.
+RNN(LSTM, GRU) implementation, and this specific script is base on
+Andrej Karpathy's char-level RNN text generation program.
 
 ]]--
 require 'torch'
@@ -17,9 +11,8 @@ require 'nn'
 require 'nngraph'
 require 'optim'
 require 'lfs'
-
-require 'util.OneHot'
 require 'util.misc'
+
 local CharSplitLMMinibatchLoader = require 'util.CharSplitLMMinibatchLoader'
 local model_utils = require 'util.model_utils'
 local LSTM = require 'model.LSTM'
@@ -28,22 +21,20 @@ local RNN = require 'model.RNN'
 
 cmd = torch.CmdLine()
 cmd:text()
-cmd:text('Train a character-level language model')
+cmd:text('Build up a Q-learning module with RNN types of structures.')
 cmd:text()
 cmd:text('Options')
 -- data
-cmd:option('-data_dir','data/tinyshakespeare','data directory. Should contain the file input.txt with input data')
 -- model params
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
-cmd:option('-num_layers', 2, 'number of layers in the LSTM')
-cmd:option('-model', 'lstm', 'lstm,gru or rnn')
+cmd:option('-num_layers', 1, 'number of layers in the LSTM')
+cmd:option('-model', 'rnn', 'lstm,gru or rnn')
 -- optimization
 cmd:option('-learning_rate',2e-5,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
-cmd:option('-seq_length',50,'number of timesteps to unroll for')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',50,'number of full passes through the training data')
 cmd:option('-grad_clip',.5,'clip gradients at this value')
@@ -51,7 +42,7 @@ cmd:option('-train_frac',0.95,'fraction of data that goes into train set')
 cmd:option('-val_frac',0.05,'fraction of data that goes into validation set')
             -- test_frac will be computed as (1 - train_frac - val_frac)
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
-cmd:option('-clip_delta', 1.0,'max value of Q value change')
+--cmd:option('-clip_delta', 1.0,'max value of Q value change')
 -- bookkeeping
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
@@ -68,7 +59,7 @@ cmd:text()
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
 -- train / val / test split for data, in fractions
-local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))
+local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))  -- temporarily leave it declaration here. Not sure if I gonna use this type of setting. If off-policy, off-line evaluation is used (e.g., using importance sampling), then this type of mechanism might be needed.
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
 
 -- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
@@ -107,12 +98,8 @@ if opt.gpuid >= 0 and opt.opencl == 1 then
     end
 end
 
--- create the data loader class
-local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
-local vocab_size = loader.vocab_size  -- the number of distinct characters
-local vocab = loader.vocab_mapping
-print('vocab size: ' .. vocab_size)
-  -- make sure output directory exists
+
+--- make sure output directory exists
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
 local state_feature_size = 4    -- the dim of input feature set
@@ -122,6 +109,8 @@ local action_size = 4   -- output size, should be the # of actions in this rl fr
 local rl_batch_data_size = 5    -- in total, 200 trajectories.
 local rl_max_traj_length = 5   -- max length of transitions in one trajectory
 local rl_discount = 0.9
+-- For all the following defined rl tensors, the 1st dim is always time index.
+-- The tensor rl_states, 1st dim is time index, 2nd is entity index in one batch, 3rd dim is state feature index
 rl_states = torch.Tensor{ {{1,0,1,0},{1,1,0,0},{1,1,0,0},{1,1,0,0},{1,0,0,0}},
     {{0,1,1,1},{1,0,0,0},{1,0,0,1},{1,0,0,0},{1,0,0,0}},
     {{0,0,0,0},{1,1,0,0},{0,1,1,1},{0,1,1,1},{1,1,0,0}},
@@ -136,11 +125,20 @@ rl_terminals = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0},
 --rl_rewards = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, 100)/100.0
 --rl_terminals = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size):random(0, 1)  -- The +1 has the same meaning as it is for rl_states
 
+-- When we are going to use a large dataset of training trajectories, this prepro() should be invoked in feval()
+if opt.gpuid >= 0 and opt.opencl == 0 then
+    rl_states = prepro(rl_states)
+    rl_actions = prepro(rl_actions)
+    rl_rewards = prepro(rl_rewards)
+    rl_terminals = prepro(rl_terminals)
+end
+
 
 -- define the model: prototypes for one timestep, then clone them in time
 local do_random_init = true
 if string.len(opt.init_from) > 0 then
     print('Not implemented yet')    -- Todo: pwang8. This should be an important functionality, reloading previous nn model. Need to modify it later.
+    os.exit()
 --    print('loading a model from checkpoint ' .. opt.init_from)
 --    local checkpoint = torch.load(opt.init_from)
 --    protos = checkpoint.protos
@@ -177,7 +175,7 @@ else
 --    protos.criterion = nn.ClassNLLCriterion()   -- It seems like the dqn program does not use a standard criterion module. If it is needed, it should be sth like MSECriterioin.
 end
 
--- the initial state of the cell/hidden states
+--- the initial state of the cell/hidden states
 init_state = {}
 for L=1,opt.num_layers do
     local h_init = torch.zeros(rl_batch_data_size, opt.rnn_size)    -- batch_size is the # of sequences in one batch. This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
@@ -189,14 +187,7 @@ for L=1,opt.num_layers do
     end
 end
 
--- -- Test: init_state is a table, so for each layer, their is a 2-dim matrix, whose row number == batch size (# of sequences in each batch), and column number == # of hidden units in one layer.
--- -- If lstm is used, size of init_state would be doubled. I have no idea about the reason right now. Know it right now. They are used for both hidden state values and cell state values in lstm.
--- -- Initially, all values in init_state table are 0.
--- for i=1, #init_state do
---     print('* key: ' .. i) print(init_state[i]:size())
--- end
-
--- ship the model to the GPU if desired
+--- ship the model to the GPU if desired
 if opt.gpuid >= 0 and opt.opencl == 0 then
     for k,v in pairs(protos) do v:cuda() end
 end
@@ -204,9 +195,10 @@ if opt.gpuid >= 0 and opt.opencl == 1 then
     for k,v in pairs(protos) do v:cl() end
 end
 
--- put the above things into one flattened parameters tensor
+--- put the above things into one flattened parameters tensor
 params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 -- both params and grad_params are a column vector all parameters, which include all params in this network.
+-- They are not put in gpu memory.
 
 -- initialization
 if do_random_init then
@@ -242,54 +234,15 @@ end
 -- Todo: pwang8. on Oct20. Change the preprocessing.
 -- preprocessing helper function, both params should be of type torch.Tensor
 -- Before prepro, both x and y are 2-dim tensors, in which one row contains one sentence, whose length is seq_length, and row # is batch_size.
-function prepro(x,y)
---    x = x:transpose(1,2):contiguous() -- swap the axes for faster indexing
---    y = y:transpose(1,2):contiguous() -- here, x and y should be of type torch.Tensor
+-- The current prepro() only move the two params onto gpu memory. Transpose will not be used.
+function prepro(x)
     if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
         x = x:float():cuda()
-        y = y:float():cuda()
-    end
-    if opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
+    elseif opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
         x = x:cl()
-        y = y:cl()
     end
-    return x,y
-end
-
--- Todo: pwang8. This eval_split func() right now is still classification oriented. Need to change it in future.
--- evaluate the loss over an entire split
-function eval_split(split_index, max_batches)   -- The 1st param split_index means: 1 - training set, 2 - validation set, 3 - test set. This program here only invokes this function with the 1st param set to 2.
-    print('evaluating loss over split index ' .. split_index)
-    local n = loader.split_sizes[split_index]   -- This is the number of batches in [split_index] set. In this program here, it is querying # of batches in evaluation set.
-    if max_batches ~= nil then n = math.min(max_batches, n) end
-
-    loader:reset_batch_pointer(split_index) -- move batch iteration pointer for this split to front
-    local loss = 0
-    local rnn_state = {[0] = init_state}  -- {[0] = init_state} creats a new table, the entity with index 0 has value of init_state.
-
-    for i = 1,n do -- iterate over batches in the split
-        -- fetch a batch
-        local x, y = loader:next_batch(split_index)
-        x,y = prepro(x,y)
-        -- forward pass
-        for t=1,opt.seq_length do
-            clones.rnn[t]:evaluate() -- for dropout proper functioning. -- This sets the mode of the Module (or sub-modules) to train=false. This is useful for modules like Dropout or BatchNormalization that have a different behaviour during training vs evaluation.
-            local lst = clones.rnn[t]:forward{x[t], unpack(rnn_state[t-1])}   -- I guess this is the forward propagate procedure. 1st param is input, 2nd param is previous hidden. The gramma here, in lua, is that it is common to write functions that take a single argument that should be a table. In that case, calling the function does not require use of parenthesis.
-            -- lst seems like a table, or tensor. So, I'm curious about what is actually returned from the forward function into lst. Not clear about it right now.
-            rnn_state[t] = {}   -- So, this rnn_state variable should store hidden states at each time step. The above line is somehow equal to forward({x[t], unpack(rnn_state[t-1s])})
-            for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end   -- #init_state returns # of hidden layers. lst is the output table from the module. It contains values of hidden state, (cell states, if existed), and output.
-            prediction = lst[#lst]    -- I guess hidden state values and output values are both in lst.
-            loss = loss + clones.criterion[t]:forward(prediction, y[t])   -- For criterion, the forward function, given an input and a target, compute the loss function associated to the criterion and return the result. In general input and target are Tensors, but some specific criterions might require some other type of object.
-            -- Here, the rnn params are clones for many times, so basically, the calculation for each time step in one sequence is the same. And this function is designed for evaluation. So, no param update is needed.
-        end
-        -- carry over lstm state
-        rnn_state[0] = rnn_state[#rnn_state]
-        print(i .. '/' .. n .. '...')
-    end
-
-    loss = loss / opt.seq_length / n
-    return loss
+    return x
 end
 
 
@@ -300,9 +253,10 @@ function set_target_q_network()
     target_protos = {}
     for k, v in pairs(protos) do
         target_protos[k] = v:clone()
-        if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
-            -- have to convert to float because integers can't be cuda()'d
+        if opt.gpuid >= 0 and opt.opencl == 0 then
             target_protos[k]:cuda()
+        elseif opt.gpuid >=0 and opt.opencl == 1 then
+            target_protos[k]:cl()
         end
     end
 end
@@ -320,17 +274,12 @@ function feval(network_param)
 
     ------------------ get minibatch -------------------
 --    local x, y = loader:next_batch(1)   -- 1 means load next batch from training set. Here the lcoal x is a new variable, different from the x above.
---    -- print('*** before prepro(), size of x is ', x:size())
 --    x,y = prepro(x,y)   -- this prepro() transpose the tensor of both x and y, exchange their 1st and 2nd dimension.
---    -- print('*** after prepro(), size of x is  ', x:size())  -- after prepro(), row # is # of seq length, column # is batch_size
-    if opt.gpuid >= 0 and opt.opencl == 0 then
-        rl_states, rl_actions = prepro(rl_states, rl_actions)
-        rl_rewards, rl_terminals = prepro(rl_rewards, rl_terminals)
-    end
 
     ------------------- forward pass -------------------
     local rnn_state = {[0] = init_state_global }
     rnn_state[rl_max_traj_length+1] = init_state
+
     local predictions = {}           -- Q function output, for each action, under certain states
     local loss = 0
     local dloss_dy = {}
@@ -345,18 +294,20 @@ function feval(network_param)
 
         target_protos.rnn:evaluate()    -- set up the evaluation mode, dropout will be turned off in this mode
         local target_Q = target_protos.rnn:forward{rl_states[t+1], unpack(rnn_state[t])}    -- target_Q is a table contains multiple tensors, including both hidden(cell) states values and output. Output is the last entity in the table.
-        local target_Q_max = target_Q[#target_Q]:max(2)    -- the 2nd dim is the one of batch index
+        local target_Q_max = target_Q[#target_Q]:max(2)    -- the 2nd dim indicates actions. target_Q[#target_Q] is the output tensor. target_Q_max is the Q value of a given state (including) hidden, and maximize over all actions.
         local one_minus_terminal = rl_terminals[t]:clone():mul(-1):add(1)   -- Todo: pwang8. Take care of the rl_terminals index, make sure it is correct.
         local target_Q_value = target_Q_max:clone():mul(rl_discount):cmul(one_minus_terminal)
         local delta = rl_rewards[t]:clone()     -- Todo: pwang8. Check if the index is correct in real application.
         delta:add(target_Q_value)
-        local current_Q = torch.FloatTensor(predictions[t]:size(1))     -- It should be the size of batch_size
-        if opt.gpuid >= 0 and opt.opencl == 0 then
-            current_Q:float():cuda()
-        end
+        local current_Q = torch.Tensor(predictions[t]:size(1))     -- It should be the size of batch_size
 
         for i=1, predictions[t]:size(1) do
             current_Q[i] = predictions[t][i][rl_actions[t][i]]
+        end
+
+        if opt.gpuid >= 0 and opt.opencl == 0 then
+            current_Q = current_Q:float():cuda()
+            delta = delta:float():cuda()
         end
         delta:add(-1, current_Q)
         loss = loss + delta:pow(2):mul(0.5):cumsum()[rl_states[t]:size(1)] -- this loss here is loss = 0.5 * (y-t)^2
@@ -365,9 +316,6 @@ function feval(network_param)
 
 
         dloss_dy[t] = torch.zeros(rl_batch_data_size, action_size)
-        for i=1,math.min(predictions[t]:size(1), rl_batch_data_size) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-            dloss_dy[t][i][rl_actions[t][i]] = delta[i]     -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is (y-t) Todo: pwang8. Take care of local declaration.
-        end
 
         if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
             -- have to convert to float because integers can't be cuda()'d
@@ -375,6 +323,10 @@ function feval(network_param)
         end
         if opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
             dloss_dy[t] = dloss_dy[t]:float():cl()
+        end
+
+        for i=1,math.min(predictions[t]:size(1), rl_batch_data_size) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
+            dloss_dy[t][i][rl_actions[t][i]] = delta[i]     -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is (y-t) Todo: pwang8. Take care of local declaration.
         end
 
     end
@@ -388,7 +340,7 @@ function feval(network_param)
         -- backprop through loss, and softmax/linear
         local doutput_t = dloss_dy[t]    -- the return value is d_loss/d_output
         table.insert(drnn_state[t], doutput_t)
---        print('###', drnn_state) os.exit()
+
         local dlst = clones.rnn[t]:backward({rl_states[t], unpack(rnn_state[t-1])}, drnn_state[t])  -- the 2nd param in module.backward() is dloss/d_output. In rnn, this rnn_output contains real output and hidden state values.
                                                             -- return of this backward() contains dloss/d_input, where input contains both raw input x and previous hidden layer values.
         drnn_state[t-1] = {}
@@ -418,12 +370,12 @@ end
 train_losses = {}
 val_losses = {}
 local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
-local iterations = 2000    --opt.max_epochs * loader.ntrain  -- loader.ntrain is the # of batches in training set. opt.max_epochs is the # of epoches to train.
-local iterations_per_epoch = loader.ntrain
+local iterations = 5000    --opt.max_epochs * loader.ntrain  -- loader.ntrain is the # of batches in training set. opt.max_epochs is the # of epoches to train.
+--local iterations_per_epoch = loader.ntrain
 local reset_target_q_rate = 100
 local loss0 = nil
 for i = 1, iterations do
-    local epoch = i / loader.ntrain
+    local epoch = i -- Todo: pwang8. This epoch calculation is not correct now.
 
     if i % reset_target_q_rate == 1 then
         set_target_q_network()
@@ -446,7 +398,7 @@ for i = 1, iterations do
     train_losses[i] = train_loss
 
     -- exponential learning rate decay
-    if i % loader.ntrain == 0 and opt.learning_rate_decay < 1 then
+    if i % 500 == 0 and opt.learning_rate_decay < 1 then
         if epoch >= opt.learning_rate_decay_after then
             local decay_factor = opt.learning_rate_decay
             optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
