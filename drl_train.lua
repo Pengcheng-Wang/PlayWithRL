@@ -108,7 +108,7 @@ local state_feature_size = 30 --4    -- the dim of input feature set
 local action_size = 30 --4   -- output size, should be the # of actions in this rl framework
 
 --- I'm creating a bunch of data here. The data should include information of state, action, instant reward, and terminal, just as it is in the dqn program.
-local rl_batch_data_size = 80    -- in total, 200 trajectories.
+local rl_batch_data_size = 200  --80    -- in total, 200 trajectories.
 local rl_max_traj_length = 5   -- max length of transitions in one trajectory
 local rl_discount = 0.9
 -- For all the following defined rl tensors, the 1st dim is always time index.
