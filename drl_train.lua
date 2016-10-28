@@ -104,7 +104,7 @@ end
 --- make sure output directory exists
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
-local state_feature_size = 4    -- the dim of input feature set
+local state_feature_size = 30 --4    -- the dim of input feature set
 local action_size = 4   -- output size, should be the # of actions in this rl framework
 
 --- I'm creating a bunch of data here. The data should include information of state, action, instant reward, and terminal, just as it is in the dqn program.
@@ -113,30 +113,30 @@ local rl_max_traj_length = 5   -- max length of transitions in one trajectory
 local rl_discount = 0.9
 -- For all the following defined rl tensors, the 1st dim is always time index.
 -- The tensor rl_states, 1st dim is time index, 2nd is entity index in one batch, 3rd dim is state feature index
-rl_states_seed = torch.Tensor{ {{1,0,1,0},{1,1,0,0},{1,1,0,0},{1,1,0,0},{1,0,0,0}},
-    {{0,1,1,1},{1,0,0,0},{1,0,0,1},{1,0,0,0},{1,0,0,0}},
-    {{0,0,0,0},{1,1,0,0},{0,1,1,1},{0,1,1,1},{1,1,0,0}},
-    {{0,0,0,0},{1,0,0,1},{0,0,0,0},{0,0,0,0},{1,0,1,0}},
-    {{0,0,0,0},{0,1,1,1},{0,0,0,0},{0,0,0,0},{0,1,1,1}},
-    {{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0}} }     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
-rl_actions_seed = torch.Tensor{ {2,4,4,4,1}, {1,4,2,2,3}, {1,4,1,1,3}, {1,2,1,1,2}, {1,1,1,1,1} }
-rl_rewards_seed = torch.Tensor{ {0,0,0,0,0}, {-1,0,0,0,0}, {0,0,-1,1,0}, {0,0,0,0,0}, {0,-1,0,0,-1} }
-rl_terminals_seed = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0}, {1,1,1,1,1}, {1,1,1,1,1} }
-for i=1,4 do
-    rl_states_seed = torch.cat(rl_states_seed, rl_states_seed, 2)
-    rl_actions_seed = torch.cat(rl_actions_seed, rl_actions_seed, 2)
-    rl_rewards_seed = torch.cat(rl_rewards_seed, rl_rewards_seed, 2)
-    rl_terminals_seed = torch.cat(rl_terminals_seed, rl_terminals_seed, 2)
-end
-rl_states = rl_states_seed
-rl_actions = rl_actions_seed
-rl_rewards = rl_rewards_seed
-rl_terminals = rl_terminals_seed
-print('Size of rl_states:', rl_states:size())
---rl_states = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size, state_feature_size):random(1, 100)/100.0     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
---rl_actions = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, action_size)
---rl_rewards = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, 100)/100.0
---rl_terminals = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size):random(0, 1)  -- The +1 has the same meaning as it is for rl_states
+--rl_states_seed = torch.Tensor{ {{1,0,1,0},{1,1,0,0},{1,1,0,0},{1,1,0,0},{1,0,0,0}},
+--    {{0,1,1,1},{1,0,0,0},{1,0,0,1},{1,0,0,0},{1,0,0,0}},
+--    {{0,0,0,0},{1,1,0,0},{0,1,1,1},{0,1,1,1},{1,1,0,0}},
+--    {{0,0,0,0},{1,0,0,1},{0,0,0,0},{0,0,0,0},{1,0,1,0}},
+--    {{0,0,0,0},{0,1,1,1},{0,0,0,0},{0,0,0,0},{0,1,1,1}},
+--    {{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0}} }     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
+--rl_actions_seed = torch.Tensor{ {2,4,4,4,1}, {1,4,2,2,3}, {1,4,1,1,3}, {1,2,1,1,2}, {1,1,1,1,1} }
+--rl_rewards_seed = torch.Tensor{ {0,0,0,0,0}, {-1,0,0,0,0}, {0,0,-1,1,0}, {0,0,0,0,0}, {0,-1,0,0,-1} }
+--rl_terminals_seed = torch.Tensor{ {0,0,0,0,0}, {1,0,0,0,0}, {1,0,1,1,0}, {1,0,1,1,0}, {1,1,1,1,1}, {1,1,1,1,1} }
+--for i=1,4 do
+--    rl_states_seed = torch.cat(rl_states_seed, rl_states_seed, 2)
+--    rl_actions_seed = torch.cat(rl_actions_seed, rl_actions_seed, 2)
+--    rl_rewards_seed = torch.cat(rl_rewards_seed, rl_rewards_seed, 2)
+--    rl_terminals_seed = torch.cat(rl_terminals_seed, rl_terminals_seed, 2)
+--end
+--rl_states = rl_states_seed
+--rl_actions = rl_actions_seed
+--rl_rewards = rl_rewards_seed
+--rl_terminals = rl_terminals_seed
+--print('Size of rl_states:', rl_states:size())
+rl_states = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size, state_feature_size):random(1, 100)/100.0     -- the rl_max_traj_length + 1 means in target q calc, an extra state-action q value will be needed. It's not the final format. I need to carefully consider the format of input
+rl_actions = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, action_size)
+rl_rewards = torch.Tensor(rl_max_traj_length, rl_batch_data_size):random(1, 100)/100.0
+rl_terminals = torch.Tensor(rl_max_traj_length+1, rl_batch_data_size):random(0, 1)  -- The +1 has the same meaning as it is for rl_states
 
 -- We also need a preprocessing here. The difference is that, their char_rnn input for each sequence at each time step is one integer (char index),
 -- but ours should be a tensor.
