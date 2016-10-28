@@ -105,7 +105,7 @@ end
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
 local state_feature_size = 30 --4    -- the dim of input feature set
-local action_size = 4   -- output size, should be the # of actions in this rl framework
+local action_size = 30 --4   -- output size, should be the # of actions in this rl framework
 
 --- I'm creating a bunch of data here. The data should include information of state, action, instant reward, and terminal, just as it is in the dqn program.
 local rl_batch_data_size = 80    -- in total, 200 trajectories.
