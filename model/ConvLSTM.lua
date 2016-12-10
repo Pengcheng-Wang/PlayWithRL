@@ -8,7 +8,8 @@
 -- is based on Andrej Karpathy's char-rnn program on github. Its integration with Convnet
 -- follows the implementation of Deepmind's dqn program.
 -- The param convArgs should be a table, in which it contains inputDim (image dimension),
--- outputChannel (table), filterSize (table), filterStride (table), pad (table).
+-- outputChannel (table), filterSize (table), filterStride (table), pad (table),
+-- applyPooling (boolean).
 --
 
 local ConvLSTM = {}
@@ -16,7 +17,7 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
 
     dropout = dropout or 0
     -- there will be 2*n+1 inputs. 1 input, n sets/layers of cell states and hidden states
-    local inputs = {}   -- in train.lua, inputs dictionary is designed as the structure of containing the input at current time step, hidden state and cell state at previous time step, for lstm.
+    local inputs = {}   -- in train.lua, inputs dictionary is designed as the structure containing the input at current time step, hidden state and cell state at previous time step, for lstm.
     table.insert(inputs, nn.Identity()()) -- x. For the ConvLSTM model, the input should be a batch of images(2d or 3d pixels), these inputs should be at the same time step.
     for L = 1, rnn_layer do
         table.insert(inputs, nn.Identity()()) -- prev_c[L]. The hidden layer data format for ConvLSTM is the same as ordinary lstm.
@@ -42,9 +43,15 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
 
         local conv1 = nn.SpatialConvolution(convSingleLayerInChannel, convSingleLayerOutChannel, convArgs.filterSize[conviter], convArgs.filterSize[conviter])(convSingleLayerInput):annotate{name='conv_'..conviter}  -- For the rlenv problem Catch, input is 1 channel of 24*24 pixels.
         local conv1_nl = nn.ReLU()(conv1):annotate{name='convnl_'..conviter}   -- If using a 2*2 conv window, output of one channel should be of 23*23.
-        convOutputs[conviter] = nn.SpatialMaxPooling(2,2,2,2,1,1)(conv1_nl):annotate{name='convpool_'..conviter }
-        lastConvLayerWidth = math.ceil((lastConvLayerWidth - convArgs.filterSize[conviter] + 1 + 1) / 2)
-        lastConvLayerHeight = math.ceil((lastConvLayerHeight - convArgs.filterSize[conviter] + 1 + 1) / 2)
+        if convArgs.applyPooling and convArgs.pad[conviter] ~= nil and convArgs.pad[conviter] > 0 then
+            convOutputs[conviter] = nn.SpatialMaxPooling(2,2,2,2,1,1)(conv1_nl):annotate{name='convpool_'..conviter }   -- Here we assume Conv layer uses stride of 1.
+            lastConvLayerWidth = math.ceil((lastConvLayerWidth - convArgs.filterSize[conviter] + 1 + convArgs.pad[conviter]) / 2)
+            lastConvLayerHeight = math.ceil((lastConvLayerHeight - convArgs.filterSize[conviter] + 1 + convArgs.pad[conviter]) / 2)
+        else
+            convOutputs[conviter] = conv1_nl
+            lastConvLayerWidth = lastConvLayerWidth - convArgs.filterSize[conviter] + 1
+            lastConvLayerHeight = lastConvLayerHeight - convArgs.filterSize[conviter] + 1
+        end
     end
 
     local lastConvLayerNum = convArgs.outputChannel[#convArgs.outputChannel]
@@ -86,7 +93,7 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
         -- decode the write inputs
         local in_transform = nn.Tanh()(n4)
         -- perform the LSTM update
-        local next_c           = nn.CAddTable()({
+        local next_c = nn.CAddTable()({
             nn.CMulTable()({forget_gate, prev_c}),
             nn.CMulTable()({in_gate,     in_transform})
         })

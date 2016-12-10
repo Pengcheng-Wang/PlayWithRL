@@ -1,80 +1,206 @@
 digraph G {
-	graph [bb="0,0,498.14,983.79"];
+	graph [bb="0,0,841.18,2256.6"];
 	node [label="\N",
 		shape=oval
 	];
-	n1	 [height=0.98209,
-		label="Node1\nmodule = nn.Tanh\lreverseMap = {}",
-		pos="249.07,268.58",
-		tooltip="[./model/RNN.lua]:32_",
-		width=2.3212];
+	n1	 [height=1.2571,
+		label="Node1\nmodule = nn.CAddTable\lreverseMap = {}\lmapindex = {Node5,Node6}",
+		pos="502.71,511.7",
+		tooltip="[./model/ConvLSTM.lua]:96_",
+		width=3.4902];
 	n2	 [height=1.2571,
-		label="Node2\ninput = {}\lmapindex = {Node1,Node3}\lreverseMap = {}",
-		pos="249.07,45.255",
+		label="Node2\ninput = {}\lmapindex = {Node1,Node3,Node4}\lreverseMap = {}",
+		pos="650.71,45.255",
 		tooltip="[[C]]:-1_",
-		width=3.4902];
-	n1 -> n2	 [pos="e,213.06,88.746 216.86,235.62 207.68,224.42 198.87,211.15 194.07,197.22 183.83,167.51 184.77,156.53 194.07,126.51 197.17,116.48 \
-202.01,106.6 207.56,97.371"];
-	n3	 [height=0.98209,
-		label="Node3\nmodule = nn.Linear(8 -> 4)\lreverseMap = {}",
-		pos="323.07,161.87",
-		tooltip="[./model/RNN.lua]:39_",
-		width=3.3352];
-	n1 -> n3	 [pos="e,299.04,196.86 272.48,234.44 279.03,225.18 286.24,214.97 293.11,205.25"];
-	n3 -> n2	 [pos="e,277.17,89.778 301.07,126.79 295.27,117.81 288.88,107.91 282.62,98.215"];
-	n4	 [height=1.2571,
-		label="Node4\nmodule = nn.CAddTable\lreverseMap = {}\lmapindex = {Node5,Node6}",
-		pos="249.07,385.19",
-		tooltip="[./model/RNN.lua]:32_",
-		width=3.4902];
-	n4 -> n1	 [pos="e,249.07,304.17 249.07,339.87 249.07,331.46 249.07,322.64 249.07,314.21"];
-	n5	 [height=0.98209,
-		label="Node5\nmodule = nn.Linear(5 -> 8)\lreverseMap = {}",
-		pos="120.07,501.8",
-		tooltip="[./model/RNN.lua]:30_",
-		width=3.3352];
-	n5 -> n4	 [pos="e,202.43,427.62 157.03,467.95 168.75,457.55 181.95,445.81 194.63,434.55"];
-	n6	 [height=0.98209,
-		label="Node6\nmodule = nn.Linear(8 -> 8)\lreverseMap = {}",
-		pos="378.07,501.8",
-		tooltip="[./model/RNN.lua]:31_",
-		width=3.3352];
-	n6 -> n4	 [pos="e,295.7,427.62 341.1,467.95 329.39,457.55 316.18,445.81 303.51,434.55"];
-	n7	 [height=0.98209,
-		label="Node7\nmodule = nn.Identity\lreverseMap = {}",
-		pos="133.07,608.51",
-		tooltip="[./model/RNN.lua]:7_",
-		width=2.6307];
-	n7 -> n5	 [pos="e,124.36,537.34 128.78,572.93 127.77,564.8 126.68,556.02 125.62,547.51"];
+		width=4.292];
+	n1 -> n2	 [pos="e,565.13,83.201 492.48,466.38 477.58,390.77 458.12,234.57 521.71,126.51 530.37,111.78 542.91,99.369 556.81,89.042"];
 	n8	 [height=0.98209,
-		label="Node8\nmodule = nn.Identity\lreverseMap = {}",
-		pos="365.07,608.51",
-		tooltip="[./model/RNN.lua]:11_",
+		label="Node8\nmodule = nn.Tanh\lreverseMap = {}",
+		pos="618.71,395.09",
+		tooltip="[./model/ConvLSTM.lua]:101_",
+		width=2.3212];
+	n1 -> n8	 [pos="e,586.53,427.87 544.91,468.99 556.18,457.86 568.3,445.88 579.41,434.91"];
+	n3	 [height=1.2571,
+		label="Node3\nmodule = nn.CMulTable\lreverseMap = {}\lmapindex = {Node7,Node8}",
+		pos="697.71,278.48",
+		tooltip="[./model/ConvLSTM.lua]:101_",
+		width=3.4902];
+	n3 -> n2	 [pos="e,736.92,82.835 751.5,237.09 762.94,225.59 773.45,212.09 779.71,197.22 791.89,168.25 794.97,153.98 779.71,126.51 771.41,111.57 759.05,\
+99.056 745.21,88.691"];
+	n4	 [height=0.98209,
+		label="decoder (4)\nmodule = nn.Linear(8 -> 2)\lreverseMap = {}",
+		pos="650.71,161.87",
+		tooltip="[./model/ConvLSTM.lua]:110_",
+		width=3.3352];
+	n3 -> n4	 [pos="e,664.83,197.3 679.67,233.49 676.06,224.68 672.26,215.43 668.65,206.63"];
+	n4 -> n2	 [pos="e,650.71,90.815 650.71,126.48 650.71,118.42 650.71,109.64 650.71,100.94"];
+	n5	 [height=1.2571,
+		label="Node5\nmodule = nn.CMulTable\lreverseMap = {}\lmapindex = {Node9,Node10}",
+		pos="218.71,638.21",
+		tooltip="[./model/ConvLSTM.lua]:97_",
+		width=3.6277];
+	n5 -> n1	 [pos="e,423.93,547.23 298.57,602.19 334.72,586.34 377.56,567.56 414.64,551.31"];
+	n6	 [height=1.2571,
+		label="Node6\nmodule = nn.CMulTable\lreverseMap = {}\lmapindex = {Node11,Node12}",
+		pos="502.71,638.21",
+		tooltip="[./model/ConvLSTM.lua]:98_",
+		width=3.7551];
+	n6 -> n1	 [pos="e,502.71,556.98 502.71,592.61 502.71,584.37 502.71,575.69 502.71,567.2"];
+	n7	 [height=0.98209,
+		label="Node7\nmodule = nn.Sigmoid\lreverseMap = {}",
+		pos="743.71,511.7",
+		tooltip="[./model/ConvLSTM.lua]:92_",
+		width=2.7075];
+	n7 -> n3	 [pos="e,706.55,323.95 736.87,476.33 729.39,438.75 717.31,378.01 708.54,333.93"];
+	n8 -> n3	 [pos="e,667.84,322.8 641.56,360.94 647.96,351.64 655.09,341.3 662.05,331.2"];
+	n9	 [height=0.98209,
+		label="Node9\nmodule = nn.Sigmoid\lreverseMap = {}",
+		pos="219.71,754.82",
+		tooltip="[./model/ConvLSTM.lua]:91_",
+		width=2.7075];
+	n9 -> n5	 [pos="e,219.09,683.77 219.41,719.43 219.34,711.37 219.26,702.59 219.18,693.89"];
+	n10	 [height=0.98209,
+		label="Node10\nmodule = nn.Identity\lreverseMap = {}",
+		pos="94.705,1648.1",
+		tooltip="[./model/ConvLSTM.lua]:23_",
 		width=2.6307];
-	n8 -> n6	 [pos="e,373.78,537.34 369.36,572.93 370.37,564.8 371.46,556.02 372.52,547.51"];
-	n9	 [height=1.2571,
-		label="Node9\ninput = {}\lselectindex = 1\lreverseMap = {}",
-		pos="141.07,725.12",
-		tooltip="[[C]]:-1_-1",
+	n10 -> n5	 [pos="e,152.39,677.21 94.705,1612.7 94.705,1570.8 94.705,1498.1 94.705,1435.7 94.705,1435.7 94.705,1435.7 94.705,870.43 94.705,802.8 80.005,\
+778.09 113.71,719.46 121.44,706 132.43,694.04 144.4,683.74"];
+	n11	 [height=0.98209,
+		label="Node11\nmodule = nn.Sigmoid\lreverseMap = {}",
+		pos="432.71,754.82",
+		tooltip="[./model/ConvLSTM.lua]:90_",
+		width=2.7075];
+	n11 -> n6	 [pos="e,475.99,682.94 453.33,720.05 458.76,711.15 464.76,701.34 470.64,691.71"];
+	n12	 [height=0.98209,
+		label="Node12\nmodule = nn.Tanh\lreverseMap = {}",
+		pos="631.71,754.82",
+		tooltip="[./model/ConvLSTM.lua]:94_",
+		width=2.3212];
+	n12 -> n6	 [pos="e,549.53,680.8 596.46,722.5 584.36,711.75 570.52,699.45 557.25,687.67"];
+	n13	 [height=1.2571,
+		label="Node13\ninput = {}\lselectindex = 3\lreverseMap = {}",
+		pos="743.71,638.21",
+		tooltip="[./model/ConvLSTM.lua]:85_-3",
 		width=2.1687];
-	n9 -> n7	 [pos="e,135.48,644.1 137.97,679.81 137.39,671.39 136.77,662.57 136.18,654.14"];
-	n10	 [height=1.2571,
-		label="Node10\ninput = {}\lselectindex = 2\lreverseMap = {}",
-		pos="331.07,725.12",
+	n13 -> n7	 [pos="e,743.71,547.22 743.71,592.61 743.71,581.17 743.71,568.87 743.71,557.43"];
+	n14	 [height=1.2571,
+		label="Node14\ninput = {}\lselectindex = 2\lreverseMap = {}",
+		pos="243.71,871.43",
+		tooltip="[./model/ConvLSTM.lua]:85_-2",
+		width=2.1687];
+	n14 -> n9	 [pos="e,226.92,790.25 234.49,826.44 232.69,817.82 230.8,808.77 228.99,800.14"];
+	n15	 [height=1.2571,
+		label="Node15\ninput = {}\lselectindex = 2\lreverseMap = {}",
+		pos="94.705,1871.4",
 		tooltip="[[C]]:-1_-2",
 		width=2.1687];
-	n10 -> n8	 [pos="e,354.9,643.78 344.02,680.46 346.64,671.64 349.39,662.35 352.01,653.52"];
-	n11	 [height=0.98209,
-		label="Node11\nreverseMap = {}\lnSplitOutputs = 2",
-		pos="228.07,841.73",
+	n15 -> n10	 [pos="e,94.705,1683.5 94.705,1826.2 94.705,1787.8 94.705,1732.4 94.705,1693.9"];
+	n16	 [height=1.2571,
+		label="Node16\ninput = {}\lselectindex = 1\lreverseMap = {}",
+		pos="436.71,871.43",
+		tooltip="[./model/ConvLSTM.lua]:85_-1",
+		width=2.1687];
+	n16 -> n11	 [pos="e,433.91,790.41 435.16,826.11 434.87,817.7 434.56,808.88 434.26,800.45"];
+	n17	 [height=1.2571,
+		label="Node17\ninput = {}\lselectindex = 4\lreverseMap = {}",
+		pos="619.71,871.43",
+		tooltip="[./model/ConvLSTM.lua]:85_-4",
+		width=2.1687];
+	n17 -> n12	 [pos="e,628.08,790.41 624.34,826.11 625.23,817.7 626.15,808.88 627.03,800.45"];
+	n18	 [height=0.98209,
+		label="Node18\nreverseMap = {}\lnSplitOutputs = 4",
+		pos="438.71,988.04",
+		tooltip="[./model/ConvLSTM.lua]:85_ split at [./model/ConvLSTM.lua]:85-mnode",
+		width=2.2723];
+	n18 -> n13	 [pos="e,751.59,683.31 516.01,976.37 585.87,965.08 681.51,944.97 706.71,916.68 761.06,855.66 759.97,755.1 752.83,693.26"];
+	n18 -> n14	 [pos="e,297.8,904.22 391,959 365.57,944.05 333.95,925.47 306.54,909.36"];
+	n18 -> n16	 [pos="e,437.48,916.99 438.11,952.65 437.96,944.59 437.81,935.81 437.66,927.11"];
+	n18 -> n17	 [pos="e,567.71,905.35 483.91,958.41 506.67,944 534.58,926.33 559.17,910.76"];
+	n19	 [height=0.98209,
+		label="Node19\nreverseMap = {}\lnSplitOutputs = 3",
+		pos="285.71,2114.5",
 		tooltip="[[C]]:-1_ split at [...s/pwang8/torch/install/share/lua/5.1/nngraph/gmodule.lua]:96-mnode",
 		width=2.2723];
-	n11 -> n9	 [pos="e,171.88,766.71 203.14,807.88 195.3,797.56 186.47,785.93 177.98,774.75"];
-	n11 -> n10	 [pos="e,295.36,765.86 257.03,808.5 266.8,797.63 277.9,785.27 288.49,773.49"];
-	n12	 [height=0.98209,
-		label="Node12\ninput = {}\lreverseMap = {}",
-		pos="228.07,948.44",
+	n19 -> n15	 [pos="e,115.42,1915.1 243.3,2084 228.22,2072.3 211.75,2058.1 198.71,2043.2 167.02,2007 139.16,1959.9 120.27,1924.4"];
+	n29	 [height=1.2571,
+		label="Node29\ninput = {}\lselectindex = 3\lreverseMap = {}",
+		pos="285.71,1997.9",
+		tooltip="[[C]]:-1_-3",
+		width=2.1687];
+	n19 -> n29	 [pos="e,285.71,2043.5 285.71,2079.2 285.71,2071.1 285.71,2062.3 285.71,2053.6"];
+	n32	 [height=1.2571,
+		label="Node32\ninput = {}\lselectindex = 1\lreverseMap = {}",
+		pos="477.71,1997.9",
+		tooltip="[[C]]:-1_-1",
+		width=2.1687];
+	n19 -> n32	 [pos="e,424.1,2030.9 332.67,2085.5 357.51,2070.7 388.33,2052.3 415.16,2036.3"];
+	n20	 [height=0.98209,
+		label="Node20\nmodule = nn.SplitTable\lreverseMap = {}",
+		pos="438.71,1094.7",
+		tooltip="[./model/ConvLSTM.lua]:85_",
+		width=2.9018];
+	n20 -> n18	 [pos="e,438.71,1023.6 438.71,1059.2 438.71,1051 438.71,1042.3 438.71,1033.8"];
+	n21	 [height=0.98209,
+		label="Node21\ninput = {}\lreverseMap = {}",
+		pos="285.71,2221.3",
 		tooltip="[[C]]:-1_",
 		width=2.1687];
-	n12 -> n11	 [pos="e,228.07,877.27 228.07,912.86 228.07,904.73 228.07,895.95 228.07,887.44"];
+	n21 -> n19	 [pos="e,285.71,2150.1 285.71,2185.7 285.71,2177.5 285.71,2168.8 285.71,2160.3"];
+	n22	 [height=0.98209,
+		label="Node22\nmodule = nn.Reshape(4x8)\lreverseMap = {}",
+		pos="438.71,1201.5",
+		tooltip="[./model/ConvLSTM.lua]:81_",
+		width=3.3026];
+	n22 -> n20	 [pos="e,438.71,1130.3 438.71,1165.9 438.71,1157.7 438.71,1149 438.71,1140.5"];
+	n23	 [height=1.2571,
+		label="Node23\nmodule = nn.CAddTable\lreverseMap = {}\lmapindex = {Node24,Node25}",
+		pos="438.71,1318.1",
+		tooltip="[./model/ConvLSTM.lua]:79_",
+		width=3.7652];
+	n23 -> n22	 [pos="e,438.71,1237.1 438.71,1272.8 438.71,1264.3 438.71,1255.5 438.71,1247.1"];
+	n24	 [height=0.98209,
+		label="i2h_1 (24)\nmodule = nn.Linear(1058 -> 32)\lreverseMap = {}",
+		pos="510.71,1434.7",
+		tooltip="[./model/ConvLSTM.lua]:77_",
+		width=3.8852];
+	n24 -> n23	 [pos="e,466.05,1362.6 489.3,1399.6 483.71,1390.7 477.56,1380.9 471.53,1371.3"];
+	n25	 [height=0.98209,
+		label="h2h_1 (25)\nmodule = nn.Linear(8 -> 32)\lreverseMap = {}",
+		pos="268.71,1541.4",
+		tooltip="[./model/ConvLSTM.lua]:78_",
+		width=3.4727];
+	n25 -> n23	 [pos="e,395.64,1361.1 288.68,1506.4 306.5,1477.1 333.98,1434.1 361.71,1399.3 369.96,1389 379.32,1378.4 388.59,1368.5"];
+	n26	 [height=0.98209,
+		label="Node26\nmodule = nn.Reshape(1058)\lreverseMap = {}",
+		pos="535.71,1541.4",
+		tooltip="[./model/ConvLSTM.lua]:59_",
+		width=3.4401];
+	n26 -> n24	 [pos="e,518.91,1470 527.52,1506.1 525.51,1497.7 523.34,1488.6 521.24,1479.8"];
+	n27	 [height=0.98209,
+		label="Node27\nmodule = nn.Identity\lreverseMap = {}",
+		pos="285.71,1871.4",
+		tooltip="[./model/ConvLSTM.lua]:24_",
+		width=2.6307];
+	n27 -> n25	 [pos="e,270.49,1576.9 283.92,1835.9 280.82,1776.1 274.45,1653.3 271.02,1587"];
+	n28	 [height=0.98209,
+		label="convnl_1 (28)\nmodule = nn.ReLU\lreverseMap = {}",
+		pos="529.71,1648.1",
+		tooltip="[./model/ConvLSTM.lua]:45_",
+		width=2.4474];
+	n28 -> n26	 [pos="e,533.73,1576.9 531.69,1612.5 532.15,1604.4 532.66,1595.6 533.14,1587.1"];
+	n29 -> n27	 [pos="e,285.71,1906.9 285.71,1952.3 285.71,1940.9 285.71,1928.6 285.71,1917.2"];
+	n30	 [height=0.98209,
+		label="conv_1 (30)\nmodule = nn.SpatialConvolution(1 -> 2, 2x2)\lreverseMap = {}",
+		pos="505.71,1754.8",
+		tooltip="[./model/ConvLSTM.lua]:44_",
+		width=5.3064];
+	n30 -> n28	 [pos="e,521.79,1683.6 513.63,1719.2 515.51,1711 517.55,1702.1 519.52,1693.5"];
+	n31	 [height=0.98209,
+		label="Node31\nmodule = nn.Identity\lreverseMap = {}",
+		pos="496.71,1871.4",
+		tooltip="[./model/ConvLSTM.lua]:21_",
+		width=2.6307];
+	n31 -> n30	 [pos="e,503.01,1790.2 499.41,1836 500.29,1824.8 501.28,1812.2 502.21,1800.3"];
+	n32 -> n31	 [pos="e,491.47,1906.7 484.46,1952.7 486.24,1941 488.16,1928.4 489.94,1916.7"];
 }
