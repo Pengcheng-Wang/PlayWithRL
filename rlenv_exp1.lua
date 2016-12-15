@@ -70,26 +70,17 @@ if opt.gpuid >= 0 then
     end
 end
 
---- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
-init_state_onetraj = {}
-for L=1,opt.num_layers do
-    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
-    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
-    table.insert(init_state_onetraj, h_init_traj:clone())
-    if opt.model == 'lstm' then
-        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
-    end
-end
 
--- test for the structure correctness of convLSTM
-testnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
-observation = observation:double()
---print(observation)
-print("@#@#@#")
-out1 = testnn:forward({torch.Tensor(13, 1, 24, 24):fill(1), torch.Tensor(13, opt.rnn_size), torch.Tensor(13, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
-print(out1) --(out1:size())
+---- test for the structure correctness of convLSTM
+--testnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+--observation = observation:double()
+----print(observation)
+--print("@#@#@#")
+--out1 = testnn:forward({torch.Tensor(17, 1, 24, 24):fill(1), torch.Tensor(17, opt.rnn_size), torch.Tensor(17, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
+--print(out1) --(out1:size())
+--
+--os.exit()
 
-os.exit()
 
 -- The following line is commented right now, since qlua cannot find definition of path.exists()
 --- make sure output directory exists
@@ -157,16 +148,16 @@ for L=1,opt.num_layers do
     end
 end
 
------ Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
---init_state_onetraj = {}
---for L=1,opt.num_layers do
---    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
---    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
---    table.insert(init_state_onetraj, h_init_traj:clone())
---    if opt.model == 'lstm' then
---        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
---    end
---end
+--- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
+init_state_onetraj = {}
+for L=1,opt.num_layers do
+    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
+    table.insert(init_state_onetraj, h_init_traj:clone())
+    if opt.model == 'lstm' then
+        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+    end
+end
 
 
 print('number of parameters in the model: ' .. params:nElement())
@@ -201,7 +192,7 @@ function generate_trajectory(observ_param)
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
     local observ = observ_param:clone()
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = torch.zeros(batchSize, rlTrajLength, observ:size()[1], observ:size()[2], observ:size()[3])
+    local obs = torch.zeros(batchSize, rlTrajLength, observ:size()[1], observ:size()[2], observ:size()[3])  -- Todo: pwang8. Take a look at how to design a batch in this tensor.
     local acts = torch.zeros(batchSize, rlTrajLength, 1)
     local rwds = torch.zeros(batchSize, rlTrajLength, 1)
     local trms = torch.zeros(batchSize, rlTrajLength, 1)
