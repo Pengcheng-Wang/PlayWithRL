@@ -27,7 +27,9 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
     --- Set up convnet structure
     local convInput
     local convOutputs = {}
-    local convSingleLayerInChannel, convSingleLayerOutChannel, convSingleLayerInput
+    local convSingleLayerInChannel
+    local convSingleLayerOutChannel
+    local convSingleLayerInput
     local lastConvLayerWidth = convArgs.inputDim[2]
     local lastConvLayerHeight = convArgs.inputDim[3]
     for conviter = 1, #convArgs.outputChannel do
@@ -41,7 +43,8 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
             convSingleLayerInput = convOutputs[conviter-1]
         end
 
-        local conv1 = nn.SpatialConvolution(convSingleLayerInChannel, convSingleLayerOutChannel, convArgs.filterSize[conviter], convArgs.filterSize[conviter], convArgs.filterStride[conviter], convArgs.filterStride[conviter])(convSingleLayerInput):annotate{name='conv_'..conviter}  -- For the rlenv problem Catch, input is 1 channel of 24*24 pixels.
+        local conv1 = nn.SpatialConvolution(convSingleLayerInChannel, convSingleLayerOutChannel, convArgs.filterSize[conviter], convArgs.filterSize[conviter],
+            convArgs.filterStride[conviter], convArgs.filterStride[conviter])(convSingleLayerInput):annotate{name='conv_'..conviter}  -- For the rlenv problem Catch, input is 1 channel of 24*24 pixels.
         local conv1_nl = nn.ReLU()(conv1):annotate{name='convnl_'..conviter}   -- If using a 2*2 conv window, output of one channel should be of 23*23.
         if convArgs.applyPooling and convArgs.pad[conviter] ~= nil and convArgs.pad[conviter] > 0 then
             convOutputs[conviter] = nn.SpatialMaxPooling(2,2,2,2,1,1)(conv1_nl):annotate{name='convpool_'..conviter }   -- Here we assume Conv layer uses stride of 1.
@@ -61,8 +64,8 @@ function ConvLSTM.convlstm(output_size, rnn_size, rnn_layer, dropout, convArgs)
     local x, input_size_L
     local outputs = {}
 
-    -- test
-    print('@@@&&&')  print(rnn_layer)
+--    table.insert(outputs, conv_reshape)
+
     for L = 1, rnn_layer do
         -- c,h from previos timesteps
         local prev_h = inputs[L*2]  --[L*2+1]

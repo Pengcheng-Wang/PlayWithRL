@@ -1,7 +1,8 @@
 require 'torch'
 require 'nn'
 require 'nngraph'
-
+require 'optim'
+require 'lfs'
 require 'util.misc'
 
 local image = require 'image'
@@ -45,11 +46,11 @@ cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is 
 opt = cmd:parse(arg)
 convArgs = {}
 convArgs.inputDim = stateSpec[2]     -- input image dimension
-convArgs.outputChannel = {3}
+convArgs.outputChannel = {3}    -- could have multiple layers
 convArgs.filterSize = {2}
 convArgs.filterStride = {1}
 convArgs.pad = {1}
-convArgs.applyPooling = False
+convArgs.applyPooling = True
 
 --- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
 if opt.gpuid >= 0 then
@@ -69,8 +70,30 @@ if opt.gpuid >= 0 then
     end
 end
 
+--- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
+init_state_onetraj = {}
+for L=1,opt.num_layers do
+    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
+    table.insert(init_state_onetraj, h_init_traj:clone())
+    if opt.model == 'lstm' then
+        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+    end
+end
+
+-- test for the structure correctness of convLSTM
+testnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+observation = observation:double()
+--print(observation)
+print("@#@#@#")
+out1 = testnn:forward({torch.Tensor(13, 1, 24, 24):fill(1), torch.Tensor(13, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
+print(out1:size())
+
+os.exit()
+
+-- The following line is commented right now, since qlua cannot find definition of path.exists()
 --- make sure output directory exists
-if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
+--if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
 --print('Train for playing Catch! State spec: ') print(stateSpec) print(', Action spec: ') print(actionSpec)
 
@@ -123,7 +146,7 @@ if opt.model == 'lstm' then
     end
 end
 
---- the initial state of the cell/hidden states
+--- the initial state of the cell/hidden states, for one batch
 init_state = {}
 for L=1,opt.num_layers do
     local h_init = torch.zeros(opt.batch_size, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
@@ -133,6 +156,18 @@ for L=1,opt.num_layers do
         table.insert(init_state, h_init:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
     end
 end
+
+----- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
+--init_state_onetraj = {}
+--for L=1,opt.num_layers do
+--    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+--    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
+--    table.insert(init_state_onetraj, h_init_traj:clone())
+--    if opt.model == 'lstm' then
+--        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+--    end
+--end
+
 
 print('number of parameters in the model: ' .. params:nElement())
 --- make a bunch of clones after flattening, there is one rnn model for each time step, but these models share params
@@ -160,11 +195,59 @@ end
 set_target_q_network()  -- Call it for target Q function initialization
 
 
+--- Use this function to generate trajectories for training
+function generate_trajectory(observ_param)
+    -- Here we assume observations are 3-dim images.
+    -- In simple RL environments like Catch, rlTrajLength is a fixed number.
+    local observ = observ_param:clone()
+    -- Construct one batch of observations, actions, rewards, and terminal signals.
+    local obs = torch.zeros(batchSize, rlTrajLength, observ:size()[1], observ:size()[2], observ:size()[3])
+    local acts = torch.zeros(batchSize, rlTrajLength, 1)
+    local rwds = torch.zeros(batchSize, rlTrajLength, 1)
+    local trms = torch.zeros(batchSize, rlTrajLength, 1)
+
+    local gen_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
+                                                -- No parallelization is set for this data generation step, since we have not
+                                                -- use multiple threads to run the atari simulator. Is it possible to use
+                                                -- the asychronous methods, like A3C here? That will be interesting to see.
+
+    for ep_iter = 1, batchSize do
+        for time_iter = 1, rlTrajLength do
+            clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
+            obs[ep_iter][time_iter] = observ
+            print(gen_rnn_state[0]) print("#####@@")
+            local lst = clones.rnn[time_iter]:forward{obs[ep_iter][time_iter], unpack(gen_rnn_state[time_iter-1])}
+            gen_rnn_state[time_iter] = {}
+            -- add up hidden/candidate states output into the gen_rnn_state
+            for hid_iter = 1, #init_state_onetraj do table.insert(gen_rnn_state[time_iter], lst[hid_iter]) end
+            Q_predict = lst[#lst]
+            print('@@@@@') print(Q_predict)
+        end
+    end
+
+    return obs, acts, rwds, trms
+--    -- Pick action using protos.rnn (clones.rnn)
+--    local action = torch.random(actionSpec[3][1], actionSpec[3][2])
+--    reward, observation, terminal = env:step(action)
+--    totalReward = totalReward + reward
+--
+--    -- Display
+--    if qt then
+--        image.display({image=observation, zoom=10, win=window})
+--    end
+--
+--    -- If game finished, start again
+--    if terminal then
+--        episodes = episodes + 1
+--        observation = env:start()
+--    end
+end
+
 --- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)    -- init_state is actually init hidden/cell state values, zeroed.
 function feval(network_param)
     if network_param ~= params then
-        params:copy(network_param)  -- set params values to x's values. params contain all trainable parameters in rnn.
+        params:copy(network_param)  -- set params values to x's values. params contain all trainable parameters.
     end
     grad_params:zero()
 
@@ -265,6 +348,8 @@ end
 --- Display
 local window = qt and image.display({image=observation, zoom=10})
 
+obs, acts, rwds, trms = generate_trajectory(observation)
+
 for i = 1, nSteps do
     -- Pick random action and execute it
     local action = torch.random(actionSpec[3][1], actionSpec[3][2])
@@ -275,6 +360,14 @@ for i = 1, nSteps do
     if qt then
         image.display({image=observation, zoom=10, win=window})
     end
+
+--    if reward > 0 and terminal then
+--        print('reward' .. reward .. 'And terminal is True')
+--    elseif reward > 0 and not terminal then
+--        print('Weird, terminal is ') print(terminal)
+--    elseif terminal and reward == 0 then
+--        print('Failed, terminal is True but reward is 0')
+--    end
 
 
     -- If game finished, start again
