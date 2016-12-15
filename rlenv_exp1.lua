@@ -86,8 +86,8 @@ testnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_si
 observation = observation:double()
 --print(observation)
 print("@#@#@#")
-out1 = testnn:forward({torch.Tensor(13, 1, 24, 24):fill(1), torch.Tensor(13, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
-print(out1:size())
+out1 = testnn:forward({torch.Tensor(13, 1, 24, 24):fill(1), torch.Tensor(13, opt.rnn_size), torch.Tensor(13, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
+print(out1) --(out1:size())
 
 os.exit()
 
