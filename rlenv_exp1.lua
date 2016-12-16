@@ -18,6 +18,10 @@ local env = Catch({level = 2})
 local stateSpec = env:getStateSpec()
 local actionSpec = env:getActionSpec()
 local observation = env:start()
+local game_actions = torch.Tensor((actionSpec[3][2] - actionSpec[3][1] + 1))
+for aci=0, (actionSpec[3][2] - actionSpec[3][1]) do
+    game_actions[aci+1] = (actionSpec[3][1] + aci)
+end
 
 local reward, terminal
 local episodes, totalReward = 0, 0
@@ -104,7 +108,7 @@ else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
     -- ConvLSTM model   -- Right now, we are just testing one type of rnn model, which is lstm.
     protos = {}
-    protos.rnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1]), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+    protos.rnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
 end
 
 -- graph.dot(protos.rnn.fg, 'MLP', 'outputBasename') -- The generated nn graph has been checked, which seems correct!
@@ -148,10 +152,10 @@ for L=1,opt.num_layers do
     end
 end
 
---- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation
+--- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
 init_state_onetraj = {}
 for L=1,opt.num_layers do
-    local h_init_traj = torch.zeros(opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
     table.insert(init_state_onetraj, h_init_traj:clone())
     if opt.model == 'lstm' then
@@ -185,17 +189,16 @@ function set_target_q_network()
 end
 set_target_q_network()  -- Call it for target Q function initialization
 
-
 --- Use this function to generate trajectories for training
 function generate_trajectory(observ_param)
     -- Here we assume observations are 3-dim images.
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
     local observ = observ_param:clone()
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = torch.zeros(batchSize, rlTrajLength, observ:size()[1], observ:size()[2], observ:size()[3])  -- Todo: pwang8. Take a look at how to design a batch in this tensor.
-    local acts = torch.zeros(batchSize, rlTrajLength, 1)
-    local rwds = torch.zeros(batchSize, rlTrajLength, 1)
-    local trms = torch.zeros(batchSize, rlTrajLength, 1)
+    local obs = torch.zeros(rlTrajLength, batchSize, observ:size()[1], observ:size()[2], observ:size()[3])
+    local acts = torch.zeros(rlTrajLength, batchSize, 1)
+    local rwds = torch.zeros(rlTrajLength, batchSize, 1)
+    local trms = torch.zeros(rlTrajLength, batchSize, 1)
 
     local gen_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
@@ -205,14 +208,21 @@ function generate_trajectory(observ_param)
     for ep_iter = 1, batchSize do
         for time_iter = 1, rlTrajLength do
             clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
-            obs[ep_iter][time_iter] = observ
-            print(gen_rnn_state[0]) print("#####@@")
-            local lst = clones.rnn[time_iter]:forward{obs[ep_iter][time_iter], unpack(gen_rnn_state[time_iter-1])}
+            local extra_dim_obs = torch.Tensor(1, observ:size()[1], observ:size()[2], observ:size()[3]) -- A 1-sized batch of observation
+            extra_dim_obs[1] = observ   -- Set the current observation to this 1-sized batch
+            local lst = clones.rnn[time_iter]:forward({extra_dim_obs, unpack(gen_rnn_state[time_iter-1])})
             gen_rnn_state[time_iter] = {}
             -- add up hidden/candidate states output into the gen_rnn_state
             for hid_iter = 1, #init_state_onetraj do table.insert(gen_rnn_state[time_iter], lst[hid_iter]) end
-            Q_predict = lst[#lst]
-            print('@@@@@') print(Q_predict)
+            local Q_predict = lst[#lst]
+            _, act_maxq_index = torch.max(Q_predict, 2)
+            local act_in_env = game_actions[act_maxq_index[1][1]]
+            print('@@@@@') print(Q_predict) print('---') print(act_in_env)
+            os.exit()
+            -- store these observations into training tensors
+            obs[time_iter][ep_iter] = observ
+            acts[time_iter][ep_iter] = act_in_env
+--            rwds[time_iter][ep_iter] =      -- Todo: pwang8. Take actions and perceive next step.
         end
     end
 
