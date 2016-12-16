@@ -17,7 +17,6 @@ local qt = pcall(require, 'qt')
 local env = Catch({level = 2})
 local stateSpec = env:getStateSpec()
 local actionSpec = env:getActionSpec()
-local observation = env:start()
 local game_actions = torch.Tensor((actionSpec[3][2] - actionSpec[3][1] + 1))
 for aci=0, (actionSpec[3][2] - actionSpec[3][1]) do
     game_actions[aci+1] = (actionSpec[3][1] + aci)
@@ -190,39 +189,67 @@ end
 set_target_q_network()  -- Call it for target Q function initialization
 
 --- Use this function to generate trajectories for training
-function generate_trajectory(observ_param)
+function generate_trajectory()
     -- Here we assume observations are 3-dim images.
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
-    local observ = observ_param:clone()
+    local curr_observ = env:start() -- This round of game will be dropped from sampling. It is only used for getting an example of observation
+    local curr_reward
+    local curr_terminal
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = torch.zeros(rlTrajLength, batchSize, observ:size()[1], observ:size()[2], observ:size()[3])
+    local obs = torch.zeros(rlTrajLength, batchSize, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
     local acts = torch.zeros(rlTrajLength, batchSize, 1)
     local rwds = torch.zeros(rlTrajLength, batchSize, 1)
-    local trms = torch.zeros(rlTrajLength, batchSize, 1)
+    local trms = torch.ones(rlTrajLength, batchSize, 1)
 
-    local gen_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
+    local one_entity_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
                                                 -- use multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
 
+    -- Display
+    local window = qt and image.display({image=curr_observ, zoom=10})
+
     for ep_iter = 1, batchSize do
+        curr_observ = env:start()
+        curr_reward = 0
+        curr_terminal = 0
+
         for time_iter = 1, rlTrajLength do
             clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
-            local extra_dim_obs = torch.Tensor(1, observ:size()[1], observ:size()[2], observ:size()[3]) -- A 1-sized batch of observation
-            extra_dim_obs[1] = observ   -- Set the current observation to this 1-sized batch
-            local lst = clones.rnn[time_iter]:forward({extra_dim_obs, unpack(gen_rnn_state[time_iter-1])})
-            gen_rnn_state[time_iter] = {}
-            -- add up hidden/candidate states output into the gen_rnn_state
-            for hid_iter = 1, #init_state_onetraj do table.insert(gen_rnn_state[time_iter], lst[hid_iter]) end
+            local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
+            one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
+            local lst = clones.rnn[time_iter]:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+            one_entity_rnn_state[time_iter] = {}
+            -- add up hidden/candidate states output into the one_entity_rnn_state
+            for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
             local Q_predict = lst[#lst]
-            _, act_maxq_index = torch.max(Q_predict, 2)
-            local act_in_env = game_actions[act_maxq_index[1][1]]
-            print('@@@@@') print(Q_predict) print('---') print(act_in_env)
-            os.exit()
+            local act_maxq_index
+            _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
+            local act_in_env = game_actions[act_maxq_index[1][1]]   -- act_maxq_index is a 2-dim tensor
             -- store these observations into training tensors
-            obs[time_iter][ep_iter] = observ
-            acts[time_iter][ep_iter] = act_in_env
---            rwds[time_iter][ep_iter] =      -- Todo: pwang8. Take actions and perceive next step.
+            obs[time_iter][ep_iter] = curr_observ
+            acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+            rwds[time_iter][ep_iter] = curr_reward
+            trms[time_iter][ep_iter] = curr_terminal
+--            print('@#@#@#@#@#@#@#') print(curr_observ) print('Act', act_in_env) print('Reward', curr_reward) print('Term', curr_terminal, time_iter)
+            -- Display
+            if qt then
+                image.display({image=curr_observ, zoom=10, win=window})
+            end
+            if curr_terminal == 1 then
+                break
+            end
+            --- Advance to the next step
+            curr_reward, curr_observ, curr_terminal = env:step(act_in_env)
+            if curr_terminal then
+                curr_terminal = 1
+            else
+                curr_terminal = 0
+            end
+
+            if curr_reward > 0 then
+                print('Reward', curr_reward) print(curr_observ)
+            end
         end
     end
 
@@ -346,36 +373,36 @@ function feval(network_param)
     return loss, grad_params
 end
 
---- Display
-local window = qt and image.display({image=observation, zoom=10})
+obs, acts, rwds, trms = generate_trajectory()
 
-obs, acts, rwds, trms = generate_trajectory(observation)
-
-for i = 1, nSteps do
-    -- Pick random action and execute it
-    local action = torch.random(actionSpec[3][1], actionSpec[3][2])
-    reward, observation, terminal = env:step(action)
-    totalReward = totalReward + reward
-
-    -- Display
-    if qt then
-        image.display({image=observation, zoom=10, win=window})
-    end
-
---    if reward > 0 and terminal then
---        print('reward' .. reward .. 'And terminal is True')
---    elseif reward > 0 and not terminal then
---        print('Weird, terminal is ') print(terminal)
---    elseif terminal and reward == 0 then
---        print('Failed, terminal is True but reward is 0')
+--- Testing display
+--local observation = env:start()
+--local window = qt and image.display({image=observation, zoom=10})
+--for i = 1, nSteps do
+--    -- Pick random action and execute it
+--    local action = torch.random(actionSpec[3][1], actionSpec[3][2])
+--    reward, observation, terminal = env:step(action)
+--    totalReward = totalReward + reward
+--
+--    -- Display
+--    if qt then
+--        image.display({image=observation, zoom=10, win=window})
 --    end
-
-
-    -- If game finished, start again
-    if terminal then
-        episodes = episodes + 1
-        observation = env:start()
-    end
-end
+--
+----    if reward > 0 and terminal then
+----        print('reward' .. reward .. 'And terminal is True')
+----    elseif reward > 0 and not terminal then
+----        print('Weird, terminal is ') print(terminal)
+----    elseif terminal and reward == 0 then
+----        print('Failed, terminal is True but reward is 0')
+----    end
+--
+--
+--    -- If game finished, start again
+--    if terminal then
+--        episodes = episodes + 1
+--        observation = env:start()
+--    end
+--end
 print('Episodes: ' .. episodes)
 print('Total Reward: ' .. totalReward)
