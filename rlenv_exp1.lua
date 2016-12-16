@@ -5,28 +5,27 @@ require 'optim'
 require 'lfs'
 require 'util.misc'
 
-local image = require 'image'
-local Catch = require 'rlenvs/Catch'
+--local image = require 'image'
+local Catch = require 'rlenvs.Catch'
 local ConvLSTM = require 'model.ConvLSTM'
 local model_utils = require 'util.model_utils'
 
--- Detect QT for image display
-local qt = pcall(require, 'qt')
+---- Detect QT for image display
+--local qt = pcall(require, 'qt')
 
 -- Initialise and start environment
-local env = Catch({level = 2})
-local stateSpec = env:getStateSpec()
-local actionSpec = env:getActionSpec()
-local game_actions = torch.Tensor((actionSpec[3][2] - actionSpec[3][1] + 1))
-for aci=0, (actionSpec[3][2] - actionSpec[3][1]) do
-    game_actions[aci+1] = (actionSpec[3][1] + aci)
+local env = Catch({level = 2, render = true, zoom = 10})
+local actionSpace = env:getActionSpace()
+local stateSpace = env:getStateSpace()
+local game_actions = torch.Tensor(actionSpace['n'])
+for aci=1, actionSpace['n'] do
+    game_actions[aci] = (aci-1)
 end
 
 local reward, terminal
 local episodes, totalReward = 0, 0
 local batchSize = 50
-local rlTrajLength = stateSpec[2][2]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
-local nSteps = batchSize * (rlTrajLength - 1)    -- stateSpec[2][2] is the size of the ball falling space. Minus 1 means the distance the ball would move down
+local rlTrajLength = stateSpace['shape'][3]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
 
 cmd = torch.CmdLine()
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
@@ -48,7 +47,7 @@ cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is 
 
 opt = cmd:parse(arg)
 convArgs = {}
-convArgs.inputDim = stateSpec[2]     -- input image dimension
+convArgs.inputDim = stateSpace['shape']     -- input image dimension
 convArgs.outputChannel = {3}    -- could have multiple layers
 convArgs.filterSize = {2}
 convArgs.filterStride = {1}
@@ -74,22 +73,10 @@ if opt.gpuid >= 0 then
 end
 
 
----- test for the structure correctness of convLSTM
---testnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
---observation = observation:double()
-----print(observation)
---print("@#@#@#")
---out1 = testnn:forward({torch.Tensor(17, 1, 24, 24):fill(1), torch.Tensor(17, opt.rnn_size), torch.Tensor(17, opt.rnn_size)})    -- I got the reason for the problem. It's that I ignore the dimension of input, which might need to contain 1st dim as batch entity index.
---print(out1) --(out1:size())
---
---os.exit()
-
-
 -- The following line is commented right now, since qlua cannot find definition of path.exists()
 --- make sure output directory exists
 --if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
---print('Train for playing Catch! State spec: ') print(stateSpec) print(', Action spec: ') print(actionSpec)
 
 --- define the model: prototypes for one timestep, then clone them in time
 local do_random_init = true
@@ -107,7 +94,7 @@ else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
     -- ConvLSTM model   -- Right now, we are just testing one type of rnn model, which is lstm.
     protos = {}
-    protos.rnn = ConvLSTM.convlstm((actionSpec[3][2] - actionSpec[3][1] + 1), opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+    protos.rnn = ConvLSTM.convlstm(actionSpace['n'], opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
 end
 
 -- graph.dot(protos.rnn.fg, 'MLP', 'outputBasename') -- The generated nn graph has been checked, which seems correct!
@@ -188,15 +175,18 @@ function set_target_q_network()
 end
 set_target_q_network()  -- Call it for target Q function initialization
 
+---- Display
+--local window = qt and image.display({image = env:start(), zoom=10})   --{image=curr_observ, zoom=10}
+
 --- Use this function to generate trajectories for training
 function generate_trajectory()
     -- Here we assume observations are 3-dim images.
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
-    local curr_observ = env:start() -- This round of game will be dropped from sampling. It is only used for getting an example of observation
+    local curr_observ -- This round of game will be dropped from sampling. It is only used for getting an example of observation
     local curr_reward
     local curr_terminal
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = torch.zeros(rlTrajLength, batchSize, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    local obs = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
     local acts = torch.zeros(rlTrajLength, batchSize, 1)
     local rwds = torch.zeros(rlTrajLength, batchSize, 1)
     local trms = torch.ones(rlTrajLength, batchSize, 1)
@@ -206,8 +196,6 @@ function generate_trajectory()
                                                 -- use multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
 
-    -- Display
-    local window = qt and image.display({image=curr_observ, zoom=10})
 
     for ep_iter = 1, batchSize do
         curr_observ = env:start()
@@ -231,44 +219,29 @@ function generate_trajectory()
             acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
             rwds[time_iter][ep_iter] = curr_reward
             trms[time_iter][ep_iter] = curr_terminal
---            print('@#@#@#@#@#@#@#') print(curr_observ) print('Act', act_in_env) print('Reward', curr_reward) print('Term', curr_terminal, time_iter)
-            -- Display
-            if qt then
-                image.display({image=curr_observ, zoom=10, win=window})
-            end
+
+            totalReward = totalReward + curr_reward
+
+            env:render()
+
             if curr_terminal == 1 then
                 break
             end
             --- Advance to the next step
-            curr_reward, curr_observ, curr_terminal = env:step(act_in_env)
+            curr_reward, curr_observ, curr_terminal = env:step(act_in_env)  -- act_in_env in rlenvs environment starts its index from 0
+
             if curr_terminal then
                 curr_terminal = 1
             else
                 curr_terminal = 0
             end
 
-            if curr_reward > 0 then
-                print('Reward', curr_reward) print(curr_observ)
-            end
         end
     end
 
+    episodes = episodes + batchSize
+
     return obs, acts, rwds, trms
---    -- Pick action using protos.rnn (clones.rnn)
---    local action = torch.random(actionSpec[3][1], actionSpec[3][2])
---    reward, observation, terminal = env:step(action)
---    totalReward = totalReward + reward
---
---    -- Display
---    if qt then
---        image.display({image=observation, zoom=10, win=window})
---    end
---
---    -- If game finished, start again
---    if terminal then
---        episodes = episodes + 1
---        observation = env:start()
---    end
 end
 
 --- do fwd/bwd and return loss, grad_params
@@ -373,36 +346,9 @@ function feval(network_param)
     return loss, grad_params
 end
 
-obs, acts, rwds, trms = generate_trajectory()
+for i=1, 2 do
+    obs, acts, rwds, trms = generate_trajectory()
+end
 
---- Testing display
---local observation = env:start()
---local window = qt and image.display({image=observation, zoom=10})
---for i = 1, nSteps do
---    -- Pick random action and execute it
---    local action = torch.random(actionSpec[3][1], actionSpec[3][2])
---    reward, observation, terminal = env:step(action)
---    totalReward = totalReward + reward
---
---    -- Display
---    if qt then
---        image.display({image=observation, zoom=10, win=window})
---    end
---
-----    if reward > 0 and terminal then
-----        print('reward' .. reward .. 'And terminal is True')
-----    elseif reward > 0 and not terminal then
-----        print('Weird, terminal is ') print(terminal)
-----    elseif terminal and reward == 0 then
-----        print('Failed, terminal is True but reward is 0')
-----    end
---
---
---    -- If game finished, start again
---    if terminal then
---        episodes = episodes + 1
---        observation = env:start()
---    end
---end
 print('Episodes: ' .. episodes)
 print('Total Reward: ' .. totalReward)
