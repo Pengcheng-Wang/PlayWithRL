@@ -5,13 +5,9 @@ require 'optim'
 require 'lfs'
 require 'util.misc'
 
---local image = require 'image'
 local Catch = require 'rlenvs.Catch'
 local ConvLSTM = require 'model.ConvLSTM'
 local model_utils = require 'util.model_utils'
-
----- Detect QT for image display
---local qt = pcall(require, 'qt')
 
 -- Initialise and start environment
 local env = Catch({level = 2, render = true, zoom = 10})
@@ -175,8 +171,6 @@ function set_target_q_network()
 end
 set_target_q_network()  -- Call it for target Q function initialization
 
----- Display
---local window = qt and image.display({image = env:start(), zoom=10})   --{image=curr_observ, zoom=10}
 
 --- Use this function to generate trajectories for training
 function generate_trajectory()
@@ -244,6 +238,12 @@ function generate_trajectory()
     return obs, acts, rwds, trms
 end
 
+
+local obs_train
+local acts_train
+local rwds_train
+local trms_train
+
 --- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)    -- init_state is actually init hidden/cell state values, zeroed.
 function feval(network_param)
@@ -265,7 +265,7 @@ function feval(network_param)
     local dloss_dy = {}
     for t=1,rlTrajLength do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)
-        local lst = clones.rnn[t]:forward{rl_states[t], unpack(rnn_state[t-1])}   -- rl_states[t] is a batch of inputs (state in the rl problem). rnn_state[t-1] is a batch of hidden states (including cell states in lstm) values from the previous time step
+        local lst = clones.rnn[t]:forward({ obs_train[t], unpack(rnn_state[t-1]) })    --{rl_states[t], unpack(rnn_state[t-1])}   -- rl_states[t] is a batch of inputs (state in the rl problem). rnn_state[t-1] is a batch of hidden states (including cell states in lstm) values from the previous time step
         rnn_state[t] = {}
         for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output.--#init_size returns the # of hidden states(including cell states in lstm) in this rnn network. lst[i] has batch_size # of rows and hidden neuron # of columns.
         predictions[t] = lst[#lst] -- last element is the prediction
@@ -347,7 +347,7 @@ function feval(network_param)
 end
 
 for i=1, 2 do
-    obs, acts, rwds, trms = generate_trajectory()
+    obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
 end
 
 print('Episodes: ' .. episodes)
