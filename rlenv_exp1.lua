@@ -34,6 +34,7 @@ cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',50,'number of full passes through the training data')
+cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
 cmd:option('-seed',123,'torch manual random number generator seed')
@@ -42,6 +43,7 @@ cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be in
 cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is used in training.')
 cmd:option('-rl_discount', 0.9, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
+cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
 
 opt = cmd:parse(arg)
 convArgs = {}
@@ -313,22 +315,21 @@ function feval(network_param)
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t) Todo: pwang8. Think about add L2 normalization item in loss.
+            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
-        print('#@#@#', dloss_dy[t], 'del', delta, 'act', acts_train[t]) os.exit()
     end
 
-    loss = loss / (rl_max_traj_length * rl_batch_data_size)
+    loss = loss / (rlTrajLength-1 * obs_train[1]:size(1))   -- loss = loss / ( (trajectory_lenght - 1) * batch_size )
 
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
-    local drnn_state = {[rl_max_traj_length] = clone_list(init_state, true)} -- true also zeros the clones
-    for t=rl_max_traj_length,1,-1 do
+    local drnn_state = {[rlTrajLength-1] = clone_list(init_state, true)} -- true also zeros the clones. The last drnn_state index should be "rlTrajLength-1", since we'll not backprop error from last time step.
+    for t = rlTrajLength-1, 1, -1 do
         -- backprop through loss, and softmax/linear
-        local doutput_t = dloss_dy[t]    -- the return value is d_loss/d_output
-        table.insert(drnn_state[t], doutput_t)
+        local doutput_t = dloss_dy[t]    -- the return value is d_loss/d_output for a batch at a certain time step
+        table.insert(drnn_state[t], doutput_t)  -- drnn_state[t] is a table containing several tensors, with each tensor representing the derivative of loss wrt output to that layer (hidden/cell/output)
 
-        local dlst = clones.rnn[t]:backward({rl_states[t], unpack(rnn_state[t-1])}, drnn_state[t])  -- the 2nd param in module.backward() is dloss/d_output. In rnn, this rnn_output contains real output and hidden state values.
+        local dlst = clones.rnn[t]:backward( { obs_train[t], unpack(rnn_state[t-1]) }, drnn_state[t] )  -- the 2nd param in module.backward() is dloss/d_output. In rnn, this rnn_output contains real output and hidden state values.
         -- return of this backward() contains dloss/d_input, where input contains both raw input x and previous hidden layer values.
         drnn_state[t-1] = {}
         -- print('*** t:', t, 'dlst size: ', #dlst)
@@ -336,10 +337,10 @@ function feval(network_param)
             if k > 1 then -- k == 1 is gradient on x, which we dont need
             -- note we do k-1 because first item is dembeddings, and then follow the
             -- derivatives of the state, starting at index 2. I know...
+            -- It is so determined due to the sequence of how input layers are arranged in this NN.
             drnn_state[t-1][k-1] = v
-            -- print ('# k:', k, 'v:', v)  -- v is 2-dim tensor, size of (batch_size * hidden_neuron_num)
-            -- For a one hidden layer rnn/gru, there are 2 entities in dlst. For a sigle hidden layer lstm, this number is 3.
-            -- I'll start to guess again. I'm guessing dlst stores gradients of error function wrt x, cell states and hidden states(for lstm).
+            -- the entities in dlst corresponds to derivative of loss wrt all input layers. In LSTM, it includes input
+            -- layer and various cell state layers and hidden layers from previous time step.
             end
         end
     end
@@ -349,8 +350,12 @@ function feval(network_param)
     -- clip gradient element-wise
     -- grad_params is calculated when model:backward() is invoked
     -- grad_params contains gradient of error function wrt trainable params.
+
+    -- Rigth now, grad_param is derivative of loss wrt params.
+    -- Try to add L2 norm item here.
+    grad_params:add(opt.L2_weight, params)  -- L2 norm is 0.5 * weight * W^2. So the derivative of this item wrt W is (weight * W).
     grad_params:clamp(-opt.grad_clip, opt.grad_clip)    -- clamp() fasten values in the tensor in between this lower and upper bounds.
-    return loss, grad_params
+    return loss, grad_params     -- Todo: pwang8. The feval() should have been correctly set up. Next step is to use it.
 end
 
 for i=1, 2 do
