@@ -40,6 +40,8 @@ cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is used in training.')
+cmd:option('-rl_discount', 0.9, 'Discount factor in reinforcement learning environment.')
+cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 
 opt = cmd:parse(arg)
 convArgs = {}
@@ -181,9 +183,9 @@ function generate_trajectory()
     local curr_terminal
     -- Construct one batch of observations, actions, rewards, and terminal signals.
     local obs = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
-    local acts = torch.zeros(rlTrajLength, batchSize, 1)
+    local acts = torch.LongTensor(rlTrajLength, batchSize, 1):fill(0)
     local rwds = torch.zeros(rlTrajLength, batchSize, 1)
-    local trms = torch.ones(rlTrajLength, batchSize, 1)
+    local trms = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 
     local one_entity_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
@@ -258,57 +260,62 @@ function feval(network_param)
 
     ------------------- forward pass -------------------
     local rnn_state = {[0] = init_state_global }
-    rnn_state[rlTrajLength+1] = init_state
 
-    local predictions = {}           -- Q function output, for each action, under certain states
+    local predict_Q_values = {}           -- Q function output, for each action, under certain states
     local loss = 0
     local dloss_dy = {}
-    for t=1,rlTrajLength do
+    for t=1, rlTrajLength-1 do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)
         local lst = clones.rnn[t]:forward({ obs_train[t], unpack(rnn_state[t-1]) })    --{rl_states[t], unpack(rnn_state[t-1])}   -- rl_states[t] is a batch of inputs (state in the rl problem). rnn_state[t-1] is a batch of hidden states (including cell states in lstm) values from the previous time step
         rnn_state[t] = {}
         for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output.--#init_size returns the # of hidden states(including cell states in lstm) in this rnn network. lst[i] has batch_size # of rows and hidden neuron # of columns.
-        predictions[t] = lst[#lst] -- last element is the prediction
-        -- print('** Hey, ', predictions[t]) -- predictions[t] is a tensor of size 50*65. 50 is batch size. 65 is vocab size. Not bad.
-
+        predict_Q_values[t] = lst[#lst] -- last element is the prediction
+        -- Todo: pwang8. Check here. The DQN program only use the real action Q value in updating.
 
         target_protos.rnn:evaluate()    -- set up the evaluation mode, dropout will be turned off in this mode
-        local target_Q = target_protos.rnn:forward{rl_states[t+1], unpack(rnn_state[t])}    -- target_Q is a table contains multiple tensors, including both hidden(cell) states values and output. Output is the last entity in the table.
-        local target_Q_max = target_Q[#target_Q]:max(2)    -- the 2nd dim indicates actions. target_Q[#target_Q] is the output tensor. target_Q_max is the Q value of a given state (including) hidden, and maximize over all actions.
-        local one_minus_terminal = rl_terminals[t]:clone():mul(-1):add(1)   -- Todo: pwang8. Take care of the rl_terminals index, make sure it is correct.
-        local target_Q_value = target_Q_max:clone():mul(rl_discount):cmul(one_minus_terminal)
-        local delta = rl_rewards[t]:clone()     -- Todo: pwang8. Check if the index is correct in real application.
-        delta:add(target_Q_value)
-        local current_Q = torch.Tensor(predictions[t]:size(1))     -- It should be the size of batch_size
-
-        for i=1, predictions[t]:size(1) do
-            current_Q[i] = predictions[t][i][rl_actions[t][i]]
+        local target_Q = target_protos.rnn:forward{obs_train[t+1], unpack(rnn_state[t])}    -- target_Q is a table contains multiple tensors, including both hidden(cell) states values and output. Output is the last entity in the table.
+        local target_Q_max = target_Q[#target_Q]:max(2)    -- the 2nd dim indicates find max value along row. target_Q[#target_Q] is the output tensor. target_Q_max is the Q value of a given state (including) hidden, and maximize over all actions.
+        local one_minus_terminal
+        if opt.gpuid >= 0 then
+            one_minus_terminal = trms_train[t+1]:clone():mul(-1):add(1):float():cuda()
+        else
+            one_minus_terminal = trms_train[t+1]:clone():mul(-1):add(1):double()
         end
+        local target_Q_value = target_Q_max:clone():mul(opt.rl_discount):cmul(one_minus_terminal)
+        local delta = rwds_train[t+1]:clone()
+        delta:add(target_Q_value)   -- delta == reward + (1-terminal) * discount * Q_max_a(s_t+1, a_t+1). delta is a 2-dim tensor.
 
-        if opt.gpuid >= 0 and opt.opencl == 0 then
+        local current_Q = torch.Tensor(predict_Q_values[t]:size(1), 1)     -- It should be the size of batch_size
+
+        for i=1, predict_Q_values[t]:size(1) do     -- for each entity in one batch
+            current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
+        end                                         -- current_Q is a 1-dim tensor
+
+        if opt.gpuid >= 0 then
             current_Q = current_Q:float():cuda()
             delta = delta:float():cuda()
         end
         delta:add(-1, current_Q)
-        loss = loss + delta:pow(2):mul(0.5):cumsum()[rl_states[t]:size(1)] -- this loss here is loss = 0.5 * (y-t)^2
-        --        delta[delta:ge(opt.clip_delta)] = opt.clip_delta
-        --        delta[delta:le(-opt.clip_delta)] = -opt.clip_delta
 
+        local tem_delta = delta:clone()     -- have to use this cloned tem_delta, since pow() and mul() will directly influence original tensor values.
+        loss = loss + tem_delta:pow(2):mul(0.5):cumsum()[obs_train[t]:size(1)] -- this loss here is loss = 0.5 * (y-t)^2
 
-        dloss_dy[t] = torch.zeros(rl_batch_data_size, action_size)
+        delta[delta:ge(opt.clip_delta)] = opt.clip_delta
+        delta[delta:le(-opt.clip_delta)] = -opt.clip_delta
 
-        if opt.gpuid >= 0 and opt.opencl == 0 then -- ship the input arrays to GPU
-        -- have to convert to float because integers can't be cuda()'d
-        dloss_dy[t] = dloss_dy[t]:float():cuda()
-        end
-        if opt.gpuid >= 0 and opt.opencl == 1 then -- ship the input arrays to GPU
-        dloss_dy[t] = dloss_dy[t]:float():cl()
-        end
+        dloss_dy[t] = torch.zeros(obs_train[t]:size(1), game_actions:size(1))   -- dim: batch_size * action_num
 
-        for i=1,math.min(predictions[t]:size(1), rl_batch_data_size) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-        dloss_dy[t][i][rl_actions[t][i]] = delta[i]     -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is (y-t) Todo: pwang8. Take care of local declaration.
+        if opt.gpuid >= 0 then -- ship the input arrays to GPU
+            -- have to convert to float because integers can't be cuda()'d
+            dloss_dy[t] = dloss_dy[t]:float():cuda()
         end
 
+        -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
+        -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
+        for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
+            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t) Todo: pwang8. Think about add L2 normalization item in loss.
+        end
+        print('#@#@#', dloss_dy[t], 'del', delta, 'act', acts_train[t]) os.exit()
     end
 
     loss = loss / (rl_max_traj_length * rl_batch_data_size)
@@ -348,6 +355,7 @@ end
 
 for i=1, 2 do
     obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
+    feval(params)
 end
 
 print('Episodes: ' .. episodes)
