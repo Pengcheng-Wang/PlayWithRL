@@ -102,7 +102,7 @@ print("ConvLSTM Constructed!")
 
 --- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
-    for k,v in pairs(protos) do v:cuda() end
+    for k,v in pairs(protos) do v:float():cuda() end
 end
 
 --- put the above things into one flattened parameters tensor
@@ -142,7 +142,7 @@ end
 init_state_onetraj = {}
 for L=1,opt.num_layers do
     local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
-    if opt.gpuid >=0 then h_init_traj = h_init_traj:cuda() end
+    if opt.gpuid >=0 then h_init_traj = h_init_traj:float():cuda() end
     table.insert(init_state_onetraj, h_init_traj:clone())
     if opt.model == 'lstm' then
         table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
@@ -168,7 +168,7 @@ function set_target_q_network()
         for k, v in pairs(protos) do
             target_protos[k] = v:clone()
             if opt.gpuid >= 0 then
-                target_protos[k]:cuda()
+                target_protos[k]:float():cuda()
             end
         end
     end
