@@ -27,13 +27,13 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-5,'learning rate')
+cmd:option('-learning_rate',2e-7,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
-cmd:option('-max_epochs',50,'number of full passes through the training data')
+cmd:option('-max_epochs',500,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
@@ -112,7 +112,7 @@ params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 
 --- initialization of all parameters in the nn
 if do_random_init then
-    params:uniform(-0.08, 0.08) -- small uniform numbers
+    params:uniform(-0.01, 0.01) -- small uniform numbers
 end
 --- initialize the LSTM forget gates with slightly higher biases to encourage remembering in the beginning
 if opt.model == 'lstm' then
@@ -358,9 +358,32 @@ function feval(network_param)
     return loss, grad_params     -- Todo: pwang8. The feval() should have been correctly set up. Next step is to use it.
 end
 
-for i=1, 2 do
+
+--- Training
+local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
+for i=1, opt.max_epochs do
     obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
-    feval(params)
+
+    local timer = torch.Timer()
+    local _, loss = optim.rmsprop(feval, params, optim_state)
+    local time = timer:time().real
+
+    local train_loss = loss[1][1]
+    print('Iter: ', i, ', Loss: ', train_loss, ', Time: ', time)
+
+    -- exponential learning rate decay
+    if i % 50 == 0 and opt.learning_rate_decay < 1 then
+        if i >= opt.learning_rate_decay_after then
+            local decay_factor = opt.learning_rate_decay
+            optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
+            print('decayed learning rate by a factor ' .. decay_factor .. ' to ' .. optim_state.learningRate)
+        end
+    end
+
+    if i % 30 == 0 and opt.target_q == 1 then
+        set_target_q_network()
+    end
+
 end
 
 print('Episodes: ' .. episodes)
