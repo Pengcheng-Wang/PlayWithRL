@@ -12,15 +12,15 @@ local model_utils = require 'util.model_utils'
 -- Initialise and start environment
 local env = Catch({level = 2, render = true, zoom = 10})
 local actionSpace = env:getActionSpace()
+local num_actions = actionSpace['n']    -- number of optinal actions in this environment
 local stateSpace = env:getStateSpace()
-local game_actions = torch.Tensor(actionSpace['n'])
-for aci=1, actionSpace['n'] do
+local game_actions = torch.Tensor(num_actions)
+for aci=1, num_actions do
     game_actions[aci] = (aci-1)
 end
 
 local reward, terminal
 local episodes, totalReward = 0, 0
-local batchSize = 50
 local rlTrajLength = stateSpace['shape'][3]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
 
 cmd = torch.CmdLine()
@@ -33,7 +33,7 @@ cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start d
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
-cmd:option('-max_epochs',500,'number of full passes through the training data')
+cmd:option('-max_epochs',5000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
@@ -44,6 +44,11 @@ cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is 
 cmd:option('-rl_discount', 0.9, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
+cmd:option('greedy_ep', 1.0, 'The hyper-parameter used in  Epsilon-greedy.')
+cmd:option('greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
+cmd:option('greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
+cmd:option('greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
+cmd:option('greedy_ep_endEpisode', 5000, 'End point of training and epsilon greedy sampling.')
 
 opt = cmd:parse(arg)
 convArgs = {}
@@ -53,6 +58,9 @@ convArgs.filterSize = {2}
 convArgs.filterStride = {1}
 convArgs.pad = {1}
 convArgs.applyPooling = True
+
+local batchSize = opt.batch_size
+local sample_iter = 1
 
 --- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
 if opt.gpuid >= 0 then
@@ -94,7 +102,7 @@ else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
     -- ConvLSTM model   -- Right now, we are just testing one type of rnn model, which is lstm.
     protos = {}
-    protos.rnn = ConvLSTM.convlstm(actionSpace['n'], opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+    protos.rnn = ConvLSTM.convlstm(num_actions, opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
 end
 
 -- graph.dot(protos.rnn.fg, 'MLP', 'outputBasename') -- The generated nn graph has been checked, which seems correct!
@@ -112,7 +120,7 @@ params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 
 --- initialization of all parameters in the nn
 if do_random_init then
-    params:uniform(-0.01, 0.01) -- small uniform numbers
+    params:uniform(-0.08, 0.08) -- small uniform numbers
 end
 --- initialize the LSTM forget gates with slightly higher biases to encourage remembering in the beginning
 if opt.model == 'lstm' then
@@ -185,6 +193,11 @@ end
 set_target_q_network()  -- Call it for target Q function initialization
 
 
+local obs_train = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+local acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+local rwds_train = torch.zeros(rlTrajLength, batchSize, 1)
+local trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
+
 --- Use this function to generate trajectories for training
 function generate_trajectory()
     -- Here we assume observations are 3-dim images.
@@ -193,78 +206,87 @@ function generate_trajectory()
     local curr_reward
     local curr_terminal
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
-    local acts = torch.LongTensor(rlTrajLength, batchSize, 1):fill(0)
-    local rwds = torch.zeros(rlTrajLength, batchSize, 1)
-    local trms = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
+    local obs = obs_train   --torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    local acts = acts_train --torch.LongTensor(rlTrajLength, batchSize, 1):fill(0)
+    local rwds = rwds_train --torch.zeros(rlTrajLength, batchSize, 1)
+    local trms = trms_train --torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 
     local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
                                                 -- use multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
+    curr_observ = env:start()
+    curr_reward = 0
+    curr_terminal = 0
 
+    local cpu_proto_smpl = {}
+    if opt.gpuid >= 0 then
+        for name,proto in pairs(protos) do
+            cpu_proto_smpl[name] = proto:clone():double()
+        end
+    else
+        cpu_proto_smpl = protos
+    end
 
-    for ep_iter = 1, batchSize do
-        curr_observ = env:start()
-        curr_reward = 0
-        curr_terminal = 0
+    local ep_iter = sample_iter % batchSize
+    if ep_iter == 0 then ep_iter = batchSize end
 
-        local cpu_proto_smpl = {}
-        if opt.gpuid >= 0 then
-            for name,proto in pairs(protos) do
-                cpu_proto_smpl[name] = proto:clone():double()
-            end
-        else
-            cpu_proto_smpl = protos
+    for time_iter = 1, rlTrajLength do
+        cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
+        local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
+        one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
+        local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+        one_entity_rnn_state[time_iter] = {}
+        -- add up hidden/candidate states output into the one_entity_rnn_state
+        for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
+        local Q_predict = lst[#lst]
+        local act_maxq_index
+        _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
+
+        --- epsilon-greedy
+        opt.greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
+                (opt.greedy_ep_endEpisode - math.max(0, sample_iter - opt.greedy_ep_startEpisode)) / opt.greedy_ep_endEpisode))
+        -- Epsilon greedy
+        if torch.uniform() < opt.greedy_ep then
+            act_maxq_index[1][1] = torch.random(1, num_actions)
         end
 
-        for time_iter = 1, rlTrajLength do
-            cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
-            local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
-            one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
-            local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
-            one_entity_rnn_state[time_iter] = {}
-            -- add up hidden/candidate states output into the one_entity_rnn_state
-            for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
-            local Q_predict = lst[#lst]
-            local act_maxq_index
-            _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
-            local act_in_env = game_actions[act_maxq_index[1][1]]   -- act_maxq_index is a 2-dim tensor
-            -- store these observations into training tensors
+        local act_in_env = game_actions[act_maxq_index[1][1]]   -- act_maxq_index is a 2-dim tensor
+
+        -- store these observations into training tensors
+        if opt.gpuid >= 0 then
+            obs[time_iter][ep_iter] = curr_observ:clone():float():cuda()
+            acts[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+            rwds[time_iter][ep_iter] = curr_reward:clone():float():cuda()
+            trms[time_iter][ep_iter] = curr_terminal:clone():float():cuda()
+        else
             obs[time_iter][ep_iter] = curr_observ
             acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
             rwds[time_iter][ep_iter] = curr_reward
             trms[time_iter][ep_iter] = curr_terminal
-
-            totalReward = totalReward + curr_reward
-
-            env:render()
-
-            if curr_terminal == 1 then
-                break
-            end
-            --- Advance to the next step
-            curr_reward, curr_observ, curr_terminal = env:step(act_in_env)  -- act_in_env in rlenvs environment starts its index from 0
-
-            if curr_terminal then
-                curr_terminal = 1
-            else
-                curr_terminal = 0
-            end
-
         end
+
+        totalReward = totalReward + curr_reward
+
+        env:render()
+
+        if curr_terminal == 1 then
+            break
+        end
+        --- Advance to the next step
+        curr_reward, curr_observ, curr_terminal = env:step(act_in_env)  -- act_in_env in rlenvs environment starts its index from 0
+
+        if curr_terminal then
+            curr_terminal = 1
+        else
+            curr_terminal = 0
+        end
+
     end
 
     episodes = episodes + batchSize
-
-    return obs, acts, rwds, trms
 end
 
-
-local obs_train
-local acts_train
-local rwds_train
-local trms_train
 
 --- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)    -- init_state is actually init hidden/cell state values, zeroed.
@@ -378,37 +400,46 @@ end
 
 
 --- Training
-local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
-for i=1, opt.max_epochs do
-    obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
+local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate }
+if opt.gpuid >= 0 then
+    obs_train = obs_train:float():cuda()
+    acts_train = acts_train:float():cuda()
+    rwds_train = rwds_train:float():cuda()
+    trms_train = trms_train:float():cuda()
+end
 
-    if opt.gpuid >= 0 then
-        obs_train = obs_train:float():cuda()
-        acts_train = acts_train:float():cuda()
-        rwds_train = rwds_train:float():cuda()
-        trms_train = trms_train:float():cuda()
-    end
+--- Fill in the data set
+while sample_iter<batchSize do
+    generate_trajectory()   -- Each time only one trajectory was generated
+    sample_iter = sample_iter + 1
+end
+
+while sample_iter<=opt.max_epochs do
+
+    generate_trajectory()   -- Each time only one trajectory was generated
 
     local timer = torch.Timer()
     local _, loss = optim.rmsprop(feval, params, optim_state)
     local time = timer:time().real
 
     local train_loss = loss[1][1]
-    print(string.format("Iter: %d, rwd: %f, loss: %f, time: %f ", i, rwds_train:sum(), train_loss, time))
+    print(string.format("Iter: %d, rwd: %.1f, loss: %.4f, time: %f ", sample_iter, rwds_train:sum(), train_loss, time))
+    print('#', torch.cdiv(grad_params, params):mean())
 
     -- exponential learning rate decay
-    if i % 50 == 0 and opt.learning_rate_decay < 1 then
-        if i >= opt.learning_rate_decay_after then
+    if sample_iter % 50 == 0 and opt.learning_rate_decay < 1 then
+        if sample_iter >= opt.learning_rate_decay_after then
             local decay_factor = opt.learning_rate_decay
             optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
             print('decayed learning rate by a factor ' .. decay_factor .. ' to ' .. optim_state.learningRate)
         end
     end
 
-    if i % 30 == 0 and opt.target_q == 1 then
+    if sample_iter % 50 == 0 and opt.target_q == 1 then
         set_target_q_network()
     end
 
+    sample_iter = sample_iter + 1
 end
 
 print('Episodes: ' .. episodes)
