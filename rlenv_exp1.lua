@@ -369,7 +369,7 @@ for i=1, opt.max_epochs do
     local time = timer:time().real
 
     local train_loss = loss[1][1]
-    print('Iter: ', i, ', Loss: ', train_loss, ', Time: ', time)
+    print('Iter: %d, rwd: %f, loss: %f, time: %f ', i, rwds_train:sum(), train_loss, time)
 
     -- exponential learning rate decay
     if i % 50 == 0 and opt.learning_rate_decay < 1 then
