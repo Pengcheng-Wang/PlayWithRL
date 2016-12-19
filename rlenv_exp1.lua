@@ -200,20 +200,20 @@ function generate_trajectory()
         curr_reward = 0
         curr_terminal = 0
 
-        local cpu_clones = {}
+        local cpu_proto_smpl = {}
         if opt.gpuid >= 0 then
             for name,proto in pairs(protos) do
-                cpu_clones[name] = proto:clone():double()
+                cpu_proto_smpl[name] = proto:clone():double()
             end
         else
-            cpu_clones = clones
+            cpu_proto_smpl = protos
         end
 
         for time_iter = 1, rlTrajLength do
-            cpu_clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
+            cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
             local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
             one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
-            local lst = cpu_clones.rnn[time_iter]:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+            local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
             one_entity_rnn_state[time_iter] = {}
             -- add up hidden/candidate states output into the one_entity_rnn_state
             for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
