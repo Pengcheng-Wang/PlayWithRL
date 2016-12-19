@@ -203,7 +203,7 @@ function generate_trajectory()
         local cpu_clones
         if opt.gpuid >= 0 then
             for name,proto in pairs(protos) do
-                cpu_clones[name] = proto:clone():CudaTensor()
+                cpu_clones[name] = proto:clone():double()
             end
         else
             cpu_clones = clones
