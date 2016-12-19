@@ -27,7 +27,7 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-5,'learning rate')
+cmd:option('-learning_rate',2e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
@@ -422,9 +422,10 @@ while sample_iter<=opt.max_epochs do
     local _, loss = optim.rmsprop(feval, params, optim_state)
     local time = timer:time().real
 
-    local train_loss = loss[1][1]
-    print(string.format("Iter: %d, rwd: %.1f, loss: %.4f, time: %f ", sample_iter, rwds_train:sum(), train_loss, time))
-    print('#', torch.cdiv(grad_params, params):mean())
+    if sample_iter % 50 == 0 then
+        local train_loss = loss[1][1]
+        print(string.format("Iter: %d, rwd: %.1f, loss: %.4f, time: %f ", sample_iter, rwds_train:sum(), train_loss, time))
+    end
 
     -- exponential learning rate decay
     if sample_iter % 50 == 0 and opt.learning_rate_decay < 1 then
