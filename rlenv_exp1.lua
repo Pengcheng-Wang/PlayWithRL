@@ -382,6 +382,13 @@ local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
 for i=1, opt.max_epochs do
     obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
 
+    if opt.gpuid >= 0 then
+        obs_train:float():cuda()
+        acts_train:float():cuda()
+        rwds_train:float():cuda()
+        trms_train:float():cuda()
+    end
+
     local timer = torch.Timer()
     local _, loss = optim.rmsprop(feval, params, optim_state)
     local time = timer:time().real
