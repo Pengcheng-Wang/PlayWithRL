@@ -149,6 +149,15 @@ for L=1,opt.num_layers do
     end
 end
 
+--- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
+init_state_onetraj_cpu = {}
+for L=1,opt.num_layers do
+    local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())
+    if opt.model == 'lstm' then
+        table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+    end
+end
 
 print('number of parameters in the model: ' .. params:nElement())
 --- make a bunch of clones after flattening, there is one rnn model for each time step, but these models share params
@@ -189,7 +198,7 @@ function generate_trajectory()
     local rwds = torch.zeros(rlTrajLength, batchSize, 1)
     local trms = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 
-    local one_entity_rnn_state = {[0] = init_state_onetraj:double():clone()}    -- only need one set, since each entity in one batch will be conducted serially.
+    local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
                                                 -- use multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
