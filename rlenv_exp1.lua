@@ -257,8 +257,8 @@ function generate_trajectory()
         if opt.gpuid >= 0 then
             obs[time_iter][ep_iter] = curr_observ:clone():float():cuda()
             acts[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds[time_iter][ep_iter] = curr_reward:clone():float():cuda()
-            trms[time_iter][ep_iter] = curr_terminal:clone():float():cuda()
+            rwds[time_iter][ep_iter] = curr_reward  --:clone():float():cuda()
+            trms[time_iter][ep_iter] = curr_terminal    --:clone():float():cuda()
         else
             obs[time_iter][ep_iter] = curr_observ
             acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
