@@ -383,10 +383,10 @@ for i=1, opt.max_epochs do
     obs_train, acts_train, rwds_train, trms_train = generate_trajectory()
 
     if opt.gpuid >= 0 then
-        obs_train:float():cuda()
-        acts_train:float():cuda()
-        rwds_train:float():cuda()
-        trms_train:float():cuda()
+        obs_train = obs_train:float():cuda()
+        acts_train = acts_train:float():cuda()
+        rwds_train = rwds_train:float():cuda()
+        trms_train = trms_train:float():cuda()
     end
 
     local timer = torch.Timer()
