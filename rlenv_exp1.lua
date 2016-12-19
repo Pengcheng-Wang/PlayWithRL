@@ -189,7 +189,7 @@ function generate_trajectory()
     local rwds = torch.zeros(rlTrajLength, batchSize, 1)
     local trms = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 
-    local one_entity_rnn_state = {[0] = init_state_onetraj}    -- only need one set, since each entity in one batch will be conducted serially.
+    local one_entity_rnn_state = {[0] = init_state_onetraj:double():clone()}    -- only need one set, since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
                                                 -- use multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
