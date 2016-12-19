@@ -200,7 +200,7 @@ function generate_trajectory()
         curr_reward = 0
         curr_terminal = 0
 
-        local cpu_clones
+        local cpu_clones = {}
         if opt.gpuid >= 0 then
             for name,proto in pairs(protos) do
                 cpu_clones[name] = proto:clone():double()
