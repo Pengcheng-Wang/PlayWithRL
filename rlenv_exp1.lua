@@ -27,7 +27,7 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-7,'learning rate')
+cmd:option('-learning_rate',2e-5,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
@@ -200,11 +200,20 @@ function generate_trajectory()
         curr_reward = 0
         curr_terminal = 0
 
+        local cpu_clones
+        if opt.gpuid >= 0 then
+            for name,proto in pairs(protos) do
+                cpu_clones[name] = proto:clone():CudaTensor()
+            end
+        else
+            cpu_clones = clones
+        end
+
         for time_iter = 1, rlTrajLength do
-            clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
+            cpu_clones.rnn[time_iter]:evaluate()    -- set to evaluatation mode, turn off dropout
             local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
             one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
-            local lst = clones.rnn[time_iter]:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+            local lst = cpu_clones.rnn[time_iter]:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
             one_entity_rnn_state[time_iter] = {}
             -- add up hidden/candidate states output into the one_entity_rnn_state
             for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
