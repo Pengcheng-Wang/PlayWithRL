@@ -5,31 +5,13 @@ require 'optim'
 require 'lfs'
 require 'util.misc'
 
-local Catch = require 'rlenvs.Catch'
-local ConvLSTM = require 'model.ConvLSTM'
-local model_utils = require 'util.model_utils'
-
--- Initialise and start environment
-local env = Catch({level = 2, render = true, zoom = 10})
-local actionSpace = env:getActionSpace()
-local num_actions = actionSpace['n']    -- number of optinal actions in this environment
-local stateSpace = env:getStateSpace()
-local game_actions = torch.Tensor(num_actions)
-for aci=1, num_actions do
-    game_actions[aci] = (aci-1)
-end
-
-local reward, terminal
-local episodes, totalReward = 0, 0
-local rlTrajLength = stateSpace['shape'][3]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
-
 cmd = torch.CmdLine()
 cmd:option('-rnn_size', 32, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
-cmd:option('-learning_rate_decay_after',100,'in number of epochs, when to start decaying the learning rate')
+cmd:option('-learning_rate_decay_after',1000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
@@ -41,25 +23,46 @@ cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-target_q',100,'set value to 1 means a seperated target Q function is used in training.')
-cmd:option('-rl_discount', 0.9, 'Discount factor in reinforcement learning environment.')
+cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
-cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
+cmd:option('-greedy_ep_end', 0.2, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('-greedy_ep_endEpisode', 5000, 'End point of training and epsilon greedy sampling.')
-cmd:option('-write_every', 500, 'Write into files frequency.')
-cmd:option('-train_count', 5, 'Write into files frequency.')
+cmd:option('-greedy_ep_endEpisode', 20000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-write_every', 500, 'Frequency of writing models into files.')
+cmd:option('-train_count', 12, 'Number of trainings conducted after each sampling.')
+cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
+cmd:option('-game_level', 4, 'The difficulty level of the game.')
+cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN.')
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
+
+local _, RlenvGame = pcall(require, opt.RL_env)
+local ConvLSTM = require 'model.ConvLSTM'
+local model_utils = require 'util.model_utils'
+
+--- Initialise and start environment
+local env = RlenvGame({level = opt.game_level, render = true, zoom = 10})
+local actionSpace = env:getActionSpace()
+local num_actions = actionSpace['n']    -- number of optinal actions in this environment
+local stateSpace = env:getStateSpace()
+local game_actions = torch.Tensor(num_actions)
+for aci=1, num_actions do
+    game_actions[aci] = (aci-1)
+end
+
+--- The Convolution Layer Setting
 convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
-convArgs.outputChannel = {8, 5}    -- could have multiple layers
-convArgs.filterSize = {4, 2}
-convArgs.filterStride = {2, 1}
-convArgs.pad = {1}
-convArgs.applyPooling = False
+local _, convSet = pcall(require, 'convnet_rlenv1')
+convSet(convArgs)   -- Call the function() in convnet_rlenv1
+
+local reward, terminal
+local episodes, totalReward = 0, 0
+local rlTrajLength = stateSpace['shape'][3]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
+if opt.traj_length > 0 then rlTrajLength = opt.traj_length end  -- If it is indicated by user, use it.
 
 local batchSize = opt.batch_size
 local sample_iter = 1
