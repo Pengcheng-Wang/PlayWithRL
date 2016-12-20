@@ -27,37 +27,38 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 8, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-4,'learning rate')
+cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
-cmd:option('-learning_rate_decay_after',10,'in number of epochs, when to start decaying the learning rate')
+cmd:option('-learning_rate_decay_after',100,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
-cmd:option('-max_epochs',5000,'number of full passes through the training data')
+cmd:option('-max_epochs',9000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-target_q',1,'set value to 1 means a seperated target Q function is used in training.')
+cmd:option('-target_q',100,'set value to 1 means a seperated target Q function is used in training.')
 cmd:option('-rl_discount', 0.9, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
-cmd:option('greedy_ep', 1.0, 'The hyper-parameter used in  Epsilon-greedy.')
-cmd:option('greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
-cmd:option('greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
-cmd:option('greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('greedy_ep_endEpisode', 5000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
+cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
+cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
+cmd:option('-greedy_ep_endEpisode', 5000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-write_every', 500, 'Write into files frequency.')
 
 opt = cmd:parse(arg)
+torch.manualSeed(opt.seed)
 convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
-convArgs.outputChannel = {3}    -- could have multiple layers
-convArgs.filterSize = {2}
-convArgs.filterStride = {1}
+convArgs.outputChannel = {8, 5}    -- could have multiple layers
+convArgs.filterSize = {4, 2}
+convArgs.filterStride = {2, 1}
 convArgs.pad = {1}
-convArgs.applyPooling = True
+convArgs.applyPooling = False
 
 local batchSize = opt.batch_size
 local sample_iter = 1
@@ -97,6 +98,7 @@ if string.len(opt.init_from) > 0 then
     opt.rnn_size = checkpoint.opt.rnn_size
     opt.num_layers = checkpoint.opt.num_layers
     opt.model = checkpoint.opt.model
+    opt.dropout = checkpoint.opt.dropout
     do_random_init = false
 else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
@@ -137,35 +139,46 @@ end
 
 --- the initial state of the cell/hidden states, for one batch
 init_state = {}
-for L=1,opt.num_layers do
-    local h_init = torch.zeros(opt.batch_size, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
-    if opt.gpuid >=0 then h_init = h_init:cuda() end
-    table.insert(init_state, h_init:clone())
-    if opt.model == 'lstm' then
-        table.insert(init_state, h_init:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
-    end
-end
-
---- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
 init_state_onetraj = {}
-for L=1,opt.num_layers do
-    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
-    if opt.gpuid >=0 then h_init_traj = h_init_traj:float():cuda() end
-    table.insert(init_state_onetraj, h_init_traj:clone())
-    if opt.model == 'lstm' then
-        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
-    end
-end
-
---- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
 init_state_onetraj_cpu = {}
 for L=1,opt.num_layers do
+    local h_init = torch.zeros(opt.batch_size, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    if opt.gpuid >=0 then
+        h_init = h_init:float():cuda()
+        h_init_traj = h_init_traj:float():cuda()
+    end
+    table.insert(init_state, h_init:clone())
+    table.insert(init_state_onetraj, h_init_traj:clone())
     table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())
     if opt.model == 'lstm' then
+        table.insert(init_state, h_init:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
         table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
     end
 end
+
+----- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
+--init_state_onetraj = {}
+--for L=1,opt.num_layers do
+--    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+--    if opt.gpuid >=0 then h_init_traj = h_init_traj:float():cuda() end
+--    table.insert(init_state_onetraj, h_init_traj:clone())
+--    if opt.model == 'lstm' then
+--        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+--    end
+--end
+--
+----- Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
+--init_state_onetraj_cpu = {}
+--for L=1,opt.num_layers do
+--    local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+--    table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())
+--    if opt.model == 'lstm' then
+--        table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
+--    end
+--end
 
 print('number of parameters in the model: ' .. params:nElement())
 --- make a bunch of clones after flattening, there is one rnn model for each time step, but these models share params
@@ -244,10 +257,10 @@ function generate_trajectory()
         _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
 
         --- epsilon-greedy
-        opt.greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
+        local greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
                 (opt.greedy_ep_endEpisode - math.max(0, sample_iter - opt.greedy_ep_startEpisode)) / opt.greedy_ep_endEpisode))
         -- Epsilon greedy
-        if torch.uniform() < opt.greedy_ep then
+        if torch.uniform() < greedy_ep then
             act_maxq_index[1][1] = torch.random(1, num_actions)
         end
 
@@ -257,8 +270,8 @@ function generate_trajectory()
         if opt.gpuid >= 0 then
             obs[time_iter][ep_iter] = curr_observ:clone():float():cuda()
             acts[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds[time_iter][ep_iter] = curr_reward  --:clone():float():cuda()
-            trms[time_iter][ep_iter] = curr_terminal    --:clone():float():cuda()
+            rwds[time_iter][ep_iter] = curr_reward
+            trms[time_iter][ep_iter] = curr_terminal
         else
             obs[time_iter][ep_iter] = curr_observ
             acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
@@ -296,10 +309,6 @@ function feval(network_param)
     end
     grad_params:zero()
 
-    ------------------ get minibatch -------------------
-    --    local x, y = loader:next_batch(1)   -- 1 means load next batch from training set. Here the lcoal x is a new variable, different from the x above.
-    --    x,y = prepro(x,y)   -- this prepro() transpose the tensor of both x and y, exchange their 1st and 2nd dimension.
-
     ------------------- forward pass -------------------
     local rnn_state = {[0] = init_state_global }
 
@@ -312,7 +321,6 @@ function feval(network_param)
         rnn_state[t] = {}
         for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output.--#init_size returns the # of hidden states(including cell states in lstm) in this rnn network. lst[i] has batch_size # of rows and hidden neuron # of columns.
         predict_Q_values[t] = lst[#lst] -- last element is the prediction
-        -- Todo: pwang8. Check here. The DQN program only use the real action Q value in updating.
 
         target_protos.rnn:evaluate()    -- set up the evaluation mode, dropout will be turned off in this mode
         local target_Q = target_protos.rnn:forward{obs_train[t+1], unpack(rnn_state[t])}    -- target_Q is a table contains multiple tensors, including both hidden(cell) states values and output. Output is the last entity in the table.
@@ -395,7 +403,7 @@ function feval(network_param)
     -- Try to add L2 norm item here.
     grad_params:add(opt.L2_weight, params)  -- L2 norm is 0.5 * weight * W^2. So the derivative of this item wrt W is (weight * W).
     grad_params:clamp(-opt.grad_clip, opt.grad_clip)    -- clamp() fasten values in the tensor in between this lower and upper bounds.
-    return loss, grad_params     -- Todo: pwang8. The feval() should have been correctly set up. Next step is to use it.
+    return loss, grad_params
 end
 
 
@@ -424,7 +432,7 @@ while sample_iter<=opt.max_epochs do
 
     if sample_iter % 50 == 0 then
         local train_loss = loss[1][1]
-        print(string.format("Iter: %d, rwd: %.1f, loss: %.4f, time: %f ", sample_iter, rwds_train:sum(), train_loss, time))
+        print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, time: %.3f ", sample_iter, rwds_train:sum(), grad_params:norm()/params:norm(), time))
     end
 
     -- exponential learning rate decay
@@ -436,12 +444,22 @@ while sample_iter<=opt.max_epochs do
         end
     end
 
-    if sample_iter % 50 == 0 and opt.target_q == 1 then
+    if opt.target_q > 0 and sample_iter % opt.target_q == 0 then
         set_target_q_network()
+    end
+
+    -- every now and then or on last iteration
+    if sample_iter % opt.write_every == 0 or sample_iter == opt.max_epochs then
+        local savefile = string.format('%s/lm_%s_epoch%d_%.1f.t7', opt.checkpoint_dir, opt.savefile, sample_iter, rwds_train:sum())
+        print('saving checkpoint to ' .. savefile)
+        local checkpoint = {}
+        checkpoint.protos = protos
+        checkpoint.opt = opt
+        checkpoint.sample_iter = sample_iter
+        torch.save(savefile, checkpoint)
     end
 
     sample_iter = sample_iter + 1
 end
 
-print('Episodes: ' .. episodes)
-print('Total Reward: ' .. totalReward)
+print('Episodes: ', episodes, 'Total Reward: ', totalReward, 'Avg: ', totalReward/episodes)
