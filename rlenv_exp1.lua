@@ -24,7 +24,7 @@ local episodes, totalReward = 0, 0
 local rlTrajLength = stateSpace['shape'][3]    -- This is specific to this Catch testbed, because this length is determined by how long the ball could drop donw along the 2nd dimension.
 
 cmd = torch.CmdLine()
-cmd:option('-rnn_size', 8, 'size of LSTM internal state')
+cmd:option('-rnn_size', 32, 'size of LSTM internal state')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 cmd:option('-learning_rate',2e-3,'learning rate')
@@ -49,6 +49,7 @@ cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
 cmd:option('-greedy_ep_endEpisode', 5000, 'End point of training and epsilon greedy sampling.')
 cmd:option('-write_every', 500, 'Write into files frequency.')
+cmd:option('-train_count', 5, 'Write into files frequency.')
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
@@ -426,12 +427,15 @@ while sample_iter<=opt.max_epochs do
 
     generate_trajectory()   -- Each time only one trajectory was generated
 
+    local loss_t
     local timer = torch.Timer()
-    local _, loss = optim.rmsprop(feval, params, optim_state)
+    for itr=1, opt.train_count do
+        _, loss_t = optim.rmsprop(feval, params, optim_state)
+    end
     local time = timer:time().real
 
     if sample_iter % 50 == 0 then
-        local train_loss = loss[1][1]
+        local train_loss = loss_t[1][1]
         print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, time: %.3f ", sample_iter, rwds_train:sum(), grad_params:norm()/params:norm(), time))
     end
 
