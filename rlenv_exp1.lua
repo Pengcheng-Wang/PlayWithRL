@@ -22,7 +22,7 @@ cmd:option('-init_from', '', 'initialize network parameters from checkpoint at t
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-target_q',100,'set value to 1 means a seperated target Q function is used in training.')
+cmd:option('-target_q',1000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
@@ -35,6 +35,7 @@ cmd:option('-train_count', 12, 'Number of trainings conducted after each samplin
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
 cmd:option('-game_level', 4, 'The difficulty level of the game.')
 cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN.')
+cmd:option('-convnet_set', 'convnet_rlenv1', 'The CNN layers (under RNN) setting.')
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
@@ -56,7 +57,7 @@ end
 --- The Convolution Layer Setting
 convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
-local _, convSet = pcall(require, 'convnet_rlenv1')
+local _, convSet = pcall(require, opt.convnet_set)
 convSet(convArgs)   -- Call the function() in convnet_rlenv1
 
 local reward, terminal
@@ -106,7 +107,7 @@ if string.len(opt.init_from) > 0 then
     do_random_init = false
 else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
-    -- ConvLSTM model   -- Right now, we are just testing one type of rnn model, which is lstm.
+    -- ConvLSTM model
     protos = {}
     protos.rnn = ConvLSTM.convlstm(num_actions, opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
 end
@@ -128,6 +129,34 @@ params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 if do_random_init then
     params:uniform(-0.08, 0.08) -- small uniform numbers
 end
+
+--- Below is initialization using either He et al., 2015 method or Xavier init method
+-- Note: right now, using this init method will lead to larger param init value than uniform(-0.08, 0.08)
+
+--local init_conv_width = stateSpace['shape'][2]
+--local init_conv_height = stateSpace['shape'][3]
+for _,node in ipairs(protos.rnn.forwardnodes) do
+    if node.data.module and node.data.module.weight then
+        local fanin = node.data.module.weight:size(2)
+        local fanout = node.data.module.weight:size(1)
+        -- For ReLU Conv layer, use He et al., 2015 init method
+        if torch.type(node.data.module) == 'nn.SpatialConvolution' then
+            -- These following calculation will be useful if Xavier init is used in Conv Layers.
+--            --- This calculation should be correct if max polling is not applied
+--            fanin = node.data.module.nInputPlane * init_conv_width * init_conv_height
+--            init_conv_width = (init_conv_width - node.data.module.kW) / node.data.module.dW + 1
+--            init_conv_height = (init_conv_height - node.data.module.kH) / node.data.module.dH + 1
+--            fanout = node.data.module.nOutputPlane * init_conv_width * init_conv_height
+            -- Right now, we try to use the ReLU CNN init method proposed by Kaiming He etc. in theirICCV 2015 paper.
+            node.data.module.weight:normal(0, math.sqrt(2 / (node.data.module.kW * node.data.module.kH * fanout)))
+        else
+            -- otherwise, for other types of layers, use Xavier initialization
+            local uni_dist_length = math.sqrt(6 / (fanin + fanout))
+            node.data.module.weight:uniform(-1*uni_dist_length, uni_dist_length)
+        end
+    end
+end
+
 --- initialize the LSTM forget gates with slightly higher biases to encourage remembering in the beginning
 if opt.model == 'lstm' then
     for layer_idx = 1, opt.num_layers do
@@ -163,27 +192,6 @@ for L=1,opt.num_layers do
     end
 end
 
------ Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
---init_state_onetraj = {}
---for L=1,opt.num_layers do
---    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
---    if opt.gpuid >=0 then h_init_traj = h_init_traj:float():cuda() end
---    table.insert(init_state_onetraj, h_init_traj:clone())
---    if opt.model == 'lstm' then
---        table.insert(init_state_onetraj, h_init_traj:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
---    end
---end
---
------ Generate the initial hidden/candidate representation for one trajectory, used in trajectory generation, it's one-entity batch
---init_state_onetraj_cpu = {}
---for L=1,opt.num_layers do
---    local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
---    table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())
---    if opt.model == 'lstm' then
---        table.insert(init_state_onetraj_cpu, h_init_traj_cpu:clone())    -- This table init_state is used to store hidden state and cell state values. So, for LSTM, it requires doubled space, for both storing s and c values. The number of lines indicates all sequences in one batch could be processed parallelly.
---    end
---end
-
 print('number of parameters in the model: ' .. params:nElement())
 --- make a bunch of clones after flattening, there is one rnn model for each time step, but these models share params
 clones = {}     -- clones is a table, not torch.Tensor
@@ -211,7 +219,7 @@ set_target_q_network()  -- Call it for target Q function initialization
 
 
 local obs_train = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
-local acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+local acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
 local rwds_train = torch.zeros(rlTrajLength, batchSize, 1)
 local trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 
@@ -219,22 +227,22 @@ local trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
 function generate_trajectory()
     -- Here we assume observations are 3-dim images.
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
-    local curr_observ -- This round of game will be dropped from sampling. It is only used for getting an example of observation
+    local curr_observ
     local curr_reward
     local curr_terminal
     -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = obs_train   --torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
-    local acts = acts_train --torch.LongTensor(rlTrajLength, batchSize, 1):fill(0)
-    local rwds = rwds_train --torch.zeros(rlTrajLength, batchSize, 1)
-    local trms = trms_train --torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
+    local obs = obs_train
+    local acts = acts_train
+    local rwds = rwds_train
+    local trms = trms_train
 
-    local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one set, since each entity in one batch will be conducted serially.
+    local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one entity(trajectory), since each entity in one batch will be conducted serially.
                                                 -- No parallelization is set for this data generation step, since we have not
-                                                -- use multiple threads to run the atari simulator. Is it possible to use
+                                                -- used multiple threads to run the atari simulator. Is it possible to use
                                                 -- the asychronous methods, like A3C here? That will be interesting to see.
     curr_observ = env:start()
     curr_reward = 0
-    curr_terminal = 0
+    curr_terminal = 0   -- We assume each trajectory will not terminate instantly after initialization
 
     local cpu_proto_smpl = {}
     if opt.gpuid >= 0 then
@@ -246,7 +254,7 @@ function generate_trajectory()
     end
 
     local ep_iter = sample_iter % batchSize
-    if ep_iter == 0 then ep_iter = batchSize end
+    if ep_iter == 0 then ep_iter = batchSize end    -- Todo: pwang8. Consider to add more observation tensor with all positive trajs. Also consider to add negative reward to unsuccessful traj.
 
     for time_iter = 1, rlTrajLength do
         cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
