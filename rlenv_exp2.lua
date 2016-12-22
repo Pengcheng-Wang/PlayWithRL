@@ -17,8 +17,8 @@ require 'lfs'
 require 'util.misc'
 
 cmd = torch.CmdLine()
-cmd:option('-rnn_size', 32, 'size of LSTM internal state')
-cmd:option('-num_layers', 1, 'number of layers in the LSTM')
+cmd:option('-rnn_size', 128, 'size of LSTM internal state')
+cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 cmd:option('-learning_rate',2e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
