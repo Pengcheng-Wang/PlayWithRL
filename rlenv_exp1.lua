@@ -258,7 +258,7 @@ function generate_trajectory()
     cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
 
     local ep_iter = sample_iter % batchSize
-    if ep_iter == 0 then ep_iter = batchSize end    -- Todo: pwang8. Consider to add more observation tensor with all positive trajs. Also consider to add negative reward to unsuccessful traj.
+    if ep_iter == 0 then ep_iter = batchSize end
 
     for time_iter = 1, rlTrajLength do
         local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
@@ -472,7 +472,7 @@ while sample_iter<=opt.max_epochs do
 
     -- every now and then or on last iteration
     if sample_iter % opt.write_every == 0 or sample_iter == opt.max_epochs then
-        local savefile = string.format('%s/lm_%s_epoch%d_%.1f.t7', opt.checkpoint_dir, opt.savefile, sample_iter, rwds_train:sum())
+        local savefile = string.format('%s/%d_%s_epoch%d_%.1f.t7', opt.checkpoint_dir, os.time()%1000, opt.savefile, sample_iter, rwds_train:sum())
         print('saving checkpoint to ' .. savefile)
         local checkpoint = {}
         checkpoint.protos = protos
