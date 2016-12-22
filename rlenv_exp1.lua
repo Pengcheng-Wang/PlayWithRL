@@ -22,14 +22,14 @@ cmd:option('-init_from', '', 'initialize network parameters from checkpoint at t
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-target_q',1000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
+cmd:option('-target_q',500,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_end', 0.2, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('-greedy_ep_endEpisode', 20000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-greedy_ep_endEpisode', 25000, 'End point of training and epsilon greedy sampling.')
 cmd:option('-write_every', 500, 'Frequency of writing models into files.')
 cmd:option('-train_count', 12, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
@@ -252,12 +252,12 @@ function generate_trajectory()
     else
         cpu_proto_smpl = protos
     end
+    cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
 
     local ep_iter = sample_iter % batchSize
     if ep_iter == 0 then ep_iter = batchSize end    -- Todo: pwang8. Consider to add more observation tensor with all positive trajs. Also consider to add negative reward to unsuccessful traj.
 
     for time_iter = 1, rlTrajLength do
-        cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
         local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
         one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
         local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
@@ -303,6 +303,10 @@ function generate_trajectory()
 
         if curr_terminal then
             curr_terminal = 1
+            -- Here, I made some changes which modified the rlenv setting.
+            if curr_reward == 0 then
+                curr_reward = -1    -- If game terminates, and play does not succeed, then give reward of -1.
+            end
         else
             curr_terminal = 0
         end
