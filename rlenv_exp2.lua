@@ -1,3 +1,14 @@
+--
+-- User: pwang8
+-- Date: 12/22/16
+-- Time: 10:52 AM
+-- This script is modified from rlenv_exp1.lua
+-- The main purpose of this script is to train an ConvLSTM model
+-- to play a simple game.
+-- In this program, I applied 3-time sized training blocks, in which one block will all positive trajectories,
+-- one with all negative trajectories, and one with sampled running trajectories.
+--
+
 require 'torch'
 require 'nn'
 require 'nngraph'
@@ -16,6 +27,7 @@ cmd:option('-learning_rate_decay_freq',10000,'frequency of learning rate decay, 
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',50,'number of sequences to train on in parallel')
+cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
 cmd:option('-max_epochs',100000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
@@ -32,10 +44,10 @@ cmd:option('-greedy_ep_end', 0.25, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
 cmd:option('-greedy_ep_endEpisode', 50000, 'End point of training and epsilon greedy sampling.')
 cmd:option('-write_every', 500, 'Frequency of writing models into files.')
-cmd:option('-train_count', 12, 'Number of trainings conducted after each sampling.')
+cmd:option('-train_count', 6, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
 cmd:option('-game_level', 4, 'The difficulty level of the game.')
-cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN.')
+cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN. Set it to 0 if traj length could be calculated')
 cmd:option('-convnet_set', 'convnet_rlenv1', 'The CNN layers (under RNN) setting.')
 cmd:option('-print_freq',100,'frequency of printing result on screen')
 cmd:option('-gc_freq',50,'frequency of invoking garbage collection')
@@ -145,11 +157,11 @@ for _,node in ipairs(protos.rnn.forwardnodes) do
         -- For ReLU Conv layer, use He et al., 2015 init method
         if torch.type(node.data.module) == 'nn.SpatialConvolution' then
             -- These following calculation will be useful if Xavier init is used in Conv Layers.
---            --- This calculation should be correct if max polling is not applied
---            fanin = node.data.module.nInputPlane * init_conv_width * init_conv_height
---            init_conv_width = (init_conv_width - node.data.module.kW) / node.data.module.dW + 1
---            init_conv_height = (init_conv_height - node.data.module.kH) / node.data.module.dH + 1
---            fanout = node.data.module.nOutputPlane * init_conv_width * init_conv_height
+            --            --- This calculation should be correct if max polling is not applied
+            --            fanin = node.data.module.nInputPlane * init_conv_width * init_conv_height
+            --            init_conv_width = (init_conv_width - node.data.module.kW) / node.data.module.dW + 1
+            --            init_conv_height = (init_conv_height - node.data.module.kH) / node.data.module.dH + 1
+            --            fanout = node.data.module.nOutputPlane * init_conv_width * init_conv_height
             -- Right now, we try to use the ReLU CNN init method proposed by Kaiming He etc. in theirICCV 2015 paper.
             node.data.module.weight:normal(0, math.sqrt(2 / (node.data.module.kW * node.data.module.kH * fanout)))
         else
@@ -178,7 +190,12 @@ init_state = {}
 init_state_onetraj = {}
 init_state_onetraj_cpu = {}
 for L=1,opt.num_layers do
-    local h_init = torch.zeros(opt.batch_size, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    local h_init
+    if opt.batch_block > 0 then
+        h_init = torch.zeros(batchSize * 3, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    else
+        h_init = torch.zeros(batchSize, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    end
     local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     if opt.gpuid >=0 then
@@ -221,11 +238,34 @@ end
 set_target_q_network()  -- Call it for target Q function initialization
 
 
-local obs_train = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
-local acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
-local rwds_train = torch.zeros(rlTrajLength, batchSize, 1)
-local trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
+local obs_train
+local acts_train
+local rwds_train
+local trms_train
 
+if opt.batch_block > 0 then
+    -- if batch_block mode is on, all tensors will be tripled to contain
+    -- normal observation, all positive observation, and all negative observations.
+    obs_train = torch.zeros(rlTrajLength, batchSize * 3, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    acts_train = torch.LongTensor(rlTrajLength, batchSize * 3, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
+    rwds_train = torch.zeros(rlTrajLength, batchSize * 3, 1)
+    trms_train = torch.ByteTensor(rlTrajLength, batchSize * 3, 1):fill(1)
+else
+    -- Otherwise, we only store normal observation.
+    obs_train = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
+    rwds_train = torch.zeros(rlTrajLength, batchSize, 1)
+    trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
+end
+
+-- These variables will be used to help fill in pos/neg batch blocks
+-- The random observations store from index 1 to batchSize
+-- Positive trajectories store form index batchSize+1 to 2*batchSize
+-- Negative trajectories store form index 2*batchSize+1 to 3*batchSize
+local batch_pos_block_iter = batchSize + 1
+local batch_neg_block_iter = 2 * batchSize + 1
+local batch_pos_block_full = false
+local batch_neg_block_full = false
 --- Use this function to generate trajectories for training
 function generate_trajectory()
     -- Here we assume observations are 3-dim images.
@@ -240,9 +280,9 @@ function generate_trajectory()
     local trms = trms_train
 
     local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one entity(trajectory), since each entity in one batch will be conducted serially.
-                                                -- No parallelization is set for this data generation step, since we have not
-                                                -- used multiple threads to run the atari simulator. Is it possible to use
-                                                -- the asychronous methods, like A3C here? That will be interesting to see.
+    -- No parallelization is set for this data generation step, since we have not
+    -- used multiple threads to run the atari simulator. Is it possible to use
+    -- the asychronous methods, like A3C here? That will be interesting to see.
     curr_observ = env:start()
     curr_reward = 0
     curr_terminal = 0   -- We assume each trajectory will not terminate instantly after initialization
@@ -299,6 +339,35 @@ function generate_trajectory()
         env:render()
 
         if curr_terminal == 1 then
+            -- We assume the rl environment setting is as: given an numerical reward when ternimal state is reached
+            if curr_reward > 0 then
+                -- If positive reward signal is given, copy this trajectory to the 2nd block
+                for pos_block_time_iter = 1, time_iter do
+                    obs[pos_block_time_iter][batch_pos_block_iter] = obs[pos_block_time_iter][ep_iter]:clone()
+                    acts[pos_block_time_iter][batch_pos_block_iter] = acts[pos_block_time_iter][ep_iter]:clone()
+                    rwds[pos_block_time_iter][batch_pos_block_iter] = rwds[pos_block_time_iter][ep_iter]:clone()
+                    trms[pos_block_time_iter][batch_pos_block_iter] = trms[pos_block_time_iter][ep_iter]:clone()
+                end
+                batch_pos_block_iter = batch_pos_block_iter + 1
+                if batch_pos_block_iter > 2 * batchSize then
+                    batch_pos_block_iter = batchSize + 1
+                    batch_pos_block_full = true
+                end
+            else
+                -- otherwise, copy this trajectory to the 3rd block
+                for neg_block_time_iter = 1, time_iter do
+                    obs[neg_block_time_iter][batch_neg_block_iter] = obs[neg_block_time_iter][ep_iter]:clone()
+                    acts[neg_block_time_iter][batch_neg_block_iter] = acts[neg_block_time_iter][ep_iter]:clone()
+                    rwds[neg_block_time_iter][batch_neg_block_iter] = rwds[neg_block_time_iter][ep_iter]:clone()
+                    trms[neg_block_time_iter][batch_neg_block_iter] = trms[neg_block_time_iter][ep_iter]:clone()
+                end
+                batch_neg_block_iter = batch_neg_block_iter + 1
+                if batch_neg_block_iter > 3 * batchSize then
+                    batch_neg_block_iter = 2 * batchSize + 1
+                    batch_neg_block_full = true
+                end
+            end
+
             break
         end
         --- Advance to the next step
@@ -357,7 +426,7 @@ function feval(network_param)
         local current_Q = torch.Tensor(predict_Q_values[t]:size(1), 1)     -- It should be the size of batch_size
 
         for i=1, predict_Q_values[t]:size(1) do     -- for each entity in one batch
-            current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
+        current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
         end                                         -- current_Q is a 1-dim tensor
 
         if opt.gpuid >= 0 then
@@ -375,14 +444,14 @@ function feval(network_param)
         dloss_dy[t] = torch.zeros(obs_train[t]:size(1), game_actions:size(1))   -- dim: batch_size * action_num
 
         if opt.gpuid >= 0 then -- ship the input arrays to GPU
-            -- have to convert to float because integers can't be cuda()'d
-            dloss_dy[t] = dloss_dy[t]:float():cuda()
+        -- have to convert to float because integers can't be cuda()'d
+        dloss_dy[t] = dloss_dy[t]:float():cuda()
         end
 
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
+        dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
     end
 
@@ -436,10 +505,11 @@ if opt.gpuid >= 0 then
 end
 
 --- Fill in the data set
-while sample_iter<batchSize do
+while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
     generate_trajectory()   -- Each time only one trajectory was generated
     sample_iter = sample_iter + 1
 end
+print('Training starts after sample iterations of :', sample_iter)
 
 while sample_iter<=opt.max_epochs do
 
