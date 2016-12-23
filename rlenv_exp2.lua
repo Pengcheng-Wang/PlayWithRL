@@ -43,7 +43,7 @@ cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.
 cmd:option('-greedy_ep_end', 0.25, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
 cmd:option('-greedy_ep_endEpisode', 100000, 'End point of training and epsilon greedy sampling.')
-cmd:option('-write_every', 1000, 'Frequency of writing models into files.')
+cmd:option('-write_every', 500, 'Frequency of writing models into files.')
 cmd:option('-train_count', 4, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
 cmd:option('-game_level', 4, 'The difficulty level of the game.')
@@ -538,6 +538,7 @@ while sample_iter<=opt.max_epochs do
 
     if opt.target_q > 0 and sample_iter % opt.target_q == 0 then
         set_target_q_network()
+        print('Reset target Q function')
     end
 
     -- every now and then or on last iteration
