@@ -20,9 +20,9 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-6,'learning rate')
+cmd:option('-learning_rate',2e-7,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
-cmd:option('-learning_rate_decay_after',4000,'in number of epochs, when to start decaying the learning rate')
+cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-learning_rate_decay_freq',2000,'frequency of learning rate decay, in number of epochs')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
@@ -38,7 +38,7 @@ cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be in
 cmd:option('-target_q',2000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
-cmd:option('-L2_weight', 2e-8, 'Weight of derivative of L2 norm item.')
+cmd:option('-L2_weight', 2e-3, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
@@ -455,7 +455,7 @@ function feval(network_param)
         end
     end
 
-    loss = loss / (rlTrajLength-1 * obs_train[1]:size(1))   -- loss = loss / ( (trajectory_lenght - 1) * batch_size )
+    loss = loss / ((rlTrajLength-1) * obs_train[1]:size(1))   -- loss = loss / ( (trajectory_lenght - 1) * batch_size )
 
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
