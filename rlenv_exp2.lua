@@ -20,13 +20,13 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',5e-5,'learning rate')
+cmd:option('-learning_rate',2e-6,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',4000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-learning_rate_decay_freq',2000,'frequency of learning rate decay, in number of epochs')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
-cmd:option('-batch_size',50,'number of sequences to train on in parallel')
+cmd:option('-batch_size',30,'number of sequences to train on in parallel')
 cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
 cmd:option('-max_epochs',100000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
@@ -38,18 +38,18 @@ cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be in
 cmd:option('-target_q',2000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
-cmd:option('-L2_weight', 0.01, 'Weight of derivative of L2 norm item.')
+cmd:option('-L2_weight', 2e-8, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
-cmd:option('-greedy_ep_end', 0.25, 'The ending value of epsilon in ep-greedy.')
+cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('-greedy_ep_endEpisode', 100000, 'End point of training and epsilon greedy sampling.')
-cmd:option('-write_every', 500, 'Frequency of writing models into files.')
-cmd:option('-train_count', 4, 'Number of trainings conducted after each sampling.')
+cmd:option('-greedy_ep_endEpisode', 30000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-write_every', 200, 'Frequency of writing models into files.')
+cmd:option('-train_count', 1, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
 cmd:option('-game_level', 4, 'The difficulty level of the game.')
 cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN. Set it to 0 if traj length could be calculated')
 cmd:option('-convnet_set', 'convnet_rlenv1', 'The CNN layers (under RNN) setting.')
-cmd:option('-print_freq',100,'frequency of printing result on screen')
+cmd:option('-print_freq',50,'frequency of printing result on screen')
 cmd:option('-gc_freq',50,'frequency of invoking garbage collection')
 
 opt = cmd:parse(arg)
@@ -451,7 +451,7 @@ function feval(network_param)
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-        dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
+            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
     end
 
@@ -482,11 +482,11 @@ function feval(network_param)
     end
     ------------------------ misc ----------------------
     -- transfer final state to initial state (BPTT)
-    -- grad_params:div(opt.seq_length) -- this line should be here but since we use rmsprop it would have no effect. Removing for efficiency
     -- clip gradient element-wise
     -- grad_params is calculated when model:backward() is invoked
     -- grad_params contains gradient of error function wrt trainable params.
 
+    grad_params:div(rlTrajLength-1)
     -- Rigth now, grad_param is derivative of loss wrt params.
     -- Try to add L2 norm item here.
     grad_params:add(opt.L2_weight, params)  -- L2 norm is 0.5 * weight * W^2. So the derivative of this item wrt W is (weight * W).
@@ -524,7 +524,8 @@ while sample_iter<=opt.max_epochs do
 
     if sample_iter % opt.print_freq == 0 then
         local train_loss = loss_t[1][1]
-        print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, time: %.3f ", sample_iter, rwds_train:sum(), grad_params:norm()/params:norm(), time))
+        print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, loss: %.4f, time: %d:%d:%d ", sample_iter, rwds_train:sum(),
+            grad_params:norm()/params:norm(), loss_t, os.date('*t')['hour'], os.date('*t')['min'], os.date('*t')['sec']))
     end
 
     -- exponential learning rate decay
