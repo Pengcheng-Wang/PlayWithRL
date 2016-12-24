@@ -1,13 +1,9 @@
 --
 -- User: pwang8
--- Date: 12/22/16
--- Time: 10:52 AM
--- This script is modified from rlenv_exp1.lua
--- The main purpose of this script is to train an ConvLSTM model
--- to play a simple game.
--- In this program, I applied 3-time sized training blocks, in which one block will all positive trajectories,
--- one with all negative trajectories, and one with sampled running trajectories.
---
+-- Date: 12/24/16
+-- Time: 11:12 AM
+-- This script is copied and modified from rlenv_exp2.lua
+-- Compared to the DQN program,
 
 require 'torch'
 require 'nn'
@@ -20,12 +16,12 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-6,'learning rate')
+cmd:option('-learning_rate',2e-5,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-learning_rate_decay_freq',1000,'frequency of learning rate decay, in number of epochs')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
-cmd:option('-dropout',0,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
+cmd:option('-dropout',0.3,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',30,'number of sequences to train on in parallel')
 cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
 cmd:option('-max_epochs',100000,'number of full passes through the training data')
@@ -142,35 +138,35 @@ params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 
 --- initialization of all parameters in the nn
 if do_random_init then
-    params:uniform(-0.08, 0.08) -- small uniform numbers
+    params:uniform(-0.02, 0.02) -- small uniform numbers
 end
 
 --- Below is initialization using either He et al., 2015 method or Xavier init method
 -- Note: right now, using this init method will lead to larger param init value than uniform(-0.08, 0.08)
 
---local init_conv_width = stateSpace['shape'][2]
---local init_conv_height = stateSpace['shape'][3]
-for _,node in ipairs(protos.rnn.forwardnodes) do
-    if node.data.module and node.data.module.weight then
-        local fanin = node.data.module.weight:size(2)
-        local fanout = node.data.module.weight:size(1)
-        -- For ReLU Conv layer, use He et al., 2015 init method
-        if torch.type(node.data.module) == 'nn.SpatialConvolution' then
-            -- These following calculation will be useful if Xavier init is used in Conv Layers.
-            --            --- This calculation should be correct if max polling is not applied
-            --            fanin = node.data.module.nInputPlane * init_conv_width * init_conv_height
-            --            init_conv_width = (init_conv_width - node.data.module.kW) / node.data.module.dW + 1
-            --            init_conv_height = (init_conv_height - node.data.module.kH) / node.data.module.dH + 1
-            --            fanout = node.data.module.nOutputPlane * init_conv_width * init_conv_height
-            -- Right now, we try to use the ReLU CNN init method proposed by Kaiming He etc. in theirICCV 2015 paper.
-            node.data.module.weight:normal(0, math.sqrt(2 / (node.data.module.kW * node.data.module.kH * fanout)))
-        else
-            -- otherwise, for other types of layers, use Xavier initialization
-            local uni_dist_length = math.sqrt(6 / (fanin + fanout))
-            node.data.module.weight:uniform(-1*uni_dist_length, uni_dist_length)
-        end
-    end
-end
+----local init_conv_width = stateSpace['shape'][2]
+----local init_conv_height = stateSpace['shape'][3]
+--for _,node in ipairs(protos.rnn.forwardnodes) do
+--    if node.data.module and node.data.module.weight then
+--        local fanin = node.data.module.weight:size(2)
+--        local fanout = node.data.module.weight:size(1)
+--        -- For ReLU Conv layer, use He et al., 2015 init method
+--        if torch.type(node.data.module) == 'nn.SpatialConvolution' then
+--            -- These following calculation will be useful if Xavier init is used in Conv Layers.
+--            --            --- This calculation should be correct if max polling is not applied
+--            --            fanin = node.data.module.nInputPlane * init_conv_width * init_conv_height
+--            --            init_conv_width = (init_conv_width - node.data.module.kW) / node.data.module.dW + 1
+--            --            init_conv_height = (init_conv_height - node.data.module.kH) / node.data.module.dH + 1
+--            --            fanout = node.data.module.nOutputPlane * init_conv_width * init_conv_height
+--            -- Right now, we try to use the ReLU CNN init method proposed by Kaiming He etc. in theirICCV 2015 paper.
+--            node.data.module.weight:normal(0, math.sqrt(2 / (node.data.module.kW * node.data.module.kH * fanout)))
+--        else
+--            -- otherwise, for other types of layers, use Xavier initialization
+--            local uni_dist_length = math.sqrt(6 / (fanin + fanout))
+--            node.data.module.weight:uniform(-1*uni_dist_length, uni_dist_length)
+--        end
+--    end
+--end
 
 --- initialize the LSTM forget gates with slightly higher biases to encourage remembering in the beginning
 if opt.model == 'lstm' then
@@ -451,7 +447,7 @@ function feval(network_param)
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
+        dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
     end
 
