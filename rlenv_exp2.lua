@@ -525,7 +525,7 @@ while sample_iter<=opt.max_epochs do
     if sample_iter % opt.print_freq == 0 then
         local train_loss = loss_t[1][1]
         print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, loss: %.4f, time: %d:%d:%d ", sample_iter, rwds_train:sum(),
-            grad_params:norm()/params:norm(), loss_t, os.date('*t')['hour'], os.date('*t')['min'], os.date('*t')['sec']))
+            grad_params:norm()/params:norm(), train_loss, os.date('*t')['hour'], os.date('*t')['min'], os.date('*t')['sec']))
     end
 
     -- exponential learning rate decay
