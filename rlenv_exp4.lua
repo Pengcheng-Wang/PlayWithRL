@@ -336,33 +336,35 @@ function generate_trajectory()
 
         env:render()
 
-        if curr_terminal == 1 and opt.batch_block > 0 then
+        if curr_terminal == 1 then
             -- We assume the rl environment setting is as: given an numerical reward when ternimal state is reached
-            if curr_reward > 0 then
-                -- If positive reward signal is given, copy this trajectory to the 2nd block
-                for pos_block_time_iter = 1, time_iter do
-                    obs[pos_block_time_iter][batch_pos_block_iter] = obs[pos_block_time_iter][ep_iter]:clone()
-                    acts[pos_block_time_iter][batch_pos_block_iter] = acts[pos_block_time_iter][ep_iter]:clone()
-                    rwds[pos_block_time_iter][batch_pos_block_iter] = rwds[pos_block_time_iter][ep_iter]:clone()
-                    trms[pos_block_time_iter][batch_pos_block_iter] = trms[pos_block_time_iter][ep_iter]:clone()
-                end
-                batch_pos_block_iter = batch_pos_block_iter + 1
-                if batch_pos_block_iter > 2 * batchSize then
-                    batch_pos_block_iter = batchSize + 1
-                    batch_pos_block_full = true
-                end
-            else
-                -- otherwise, copy this trajectory to the 3rd block
-                for neg_block_time_iter = 1, time_iter do
-                    obs[neg_block_time_iter][batch_neg_block_iter] = obs[neg_block_time_iter][ep_iter]:clone()
-                    acts[neg_block_time_iter][batch_neg_block_iter] = acts[neg_block_time_iter][ep_iter]:clone()
-                    rwds[neg_block_time_iter][batch_neg_block_iter] = rwds[neg_block_time_iter][ep_iter]:clone()
-                    trms[neg_block_time_iter][batch_neg_block_iter] = trms[neg_block_time_iter][ep_iter]:clone()
-                end
-                batch_neg_block_iter = batch_neg_block_iter + 1
-                if batch_neg_block_iter > 3 * batchSize then
-                    batch_neg_block_iter = 2 * batchSize + 1
-                    batch_neg_block_full = true
+            if opt.batch_block > 0 then
+                if curr_reward > 0 then
+                    -- If positive reward signal is given, copy this trajectory to the 2nd block
+                    for pos_block_time_iter = 1, time_iter do
+                        obs[pos_block_time_iter][batch_pos_block_iter] = obs[pos_block_time_iter][ep_iter]:clone()
+                        acts[pos_block_time_iter][batch_pos_block_iter] = acts[pos_block_time_iter][ep_iter]:clone()
+                        rwds[pos_block_time_iter][batch_pos_block_iter] = rwds[pos_block_time_iter][ep_iter]:clone()
+                        trms[pos_block_time_iter][batch_pos_block_iter] = trms[pos_block_time_iter][ep_iter]:clone()
+                    end
+                    batch_pos_block_iter = batch_pos_block_iter + 1
+                    if batch_pos_block_iter > 2 * batchSize then
+                        batch_pos_block_iter = batchSize + 1
+                        batch_pos_block_full = true
+                    end
+                else
+                    -- otherwise, copy this trajectory to the 3rd block
+                    for neg_block_time_iter = 1, time_iter do
+                        obs[neg_block_time_iter][batch_neg_block_iter] = obs[neg_block_time_iter][ep_iter]:clone()
+                        acts[neg_block_time_iter][batch_neg_block_iter] = acts[neg_block_time_iter][ep_iter]:clone()
+                        rwds[neg_block_time_iter][batch_neg_block_iter] = rwds[neg_block_time_iter][ep_iter]:clone()
+                        trms[neg_block_time_iter][batch_neg_block_iter] = trms[neg_block_time_iter][ep_iter]:clone()
+                    end
+                    batch_neg_block_iter = batch_neg_block_iter + 1
+                    if batch_neg_block_iter > 3 * batchSize then
+                        batch_neg_block_iter = 2 * batchSize + 1
+                        batch_neg_block_full = true
+                    end
                 end
             end
 
@@ -503,9 +505,16 @@ if opt.gpuid >= 0 then
 end
 
 --- Fill in the data set
-while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
-    generate_trajectory()   -- Each time only one trajectory was generated
-    sample_iter = sample_iter + 1
+if opt.batch_block > 0 then
+    while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
+        generate_trajectory()   -- Each time only one trajectory was generated
+        sample_iter = sample_iter + 1
+    end
+else
+    while sample_iter<batchSize do
+        generate_trajectory()   -- Each time only one trajectory was generated
+        sample_iter = sample_iter + 1
+    end
 end
 print('Training starts after sample iterations of :', sample_iter)
 
