@@ -15,15 +15,15 @@ require 'lfs'
 require 'util.misc'
 
 cmd = torch.CmdLine()
-cmd:option('-rnn_size', 128, 'size of LSTM internal state')
-cmd:option('-num_layers', 2, 'number of layers in the LSTM')
+cmd:option('-rnn_size', 512, 'size of LSTM internal state')
+cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 cmd:option('-learning_rate',2e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-learning_rate_decay_freq',1000,'frequency of learning rate decay, in number of epochs')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
-cmd:option('-dropout',0.3,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
+cmd:option('-dropout',0.2,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',30,'number of sequences to train on in parallel')
 cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
 cmd:option('-max_epochs',200000,'number of full passes through the training data')
