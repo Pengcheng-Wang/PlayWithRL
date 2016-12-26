@@ -1,9 +1,11 @@
 --
+-- Created by IntelliJ IDEA.
 -- User: pwang8
--- Date: 12/24/16
--- Time: 11:12 AM
--- This script is copied and modified from rlenv_exp2.lua
--- Compared to the DQN program,
+-- Date: 12/25/16
+-- Time: 5:34 PM
+-- I'm going to directly send rlenv input into an LSTM in this script. I'm guessing, since for
+-- environments like Catch, observation is too sparse. This setting might be helpful.
+--
 
 require 'torch'
 require 'nn'
@@ -16,7 +18,7 @@ cmd = torch.CmdLine()
 cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
-cmd:option('-learning_rate',2e-5,'learning rate')
+cmd:option('-learning_rate',2e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
 cmd:option('-learning_rate_decay_freq',1000,'frequency of learning rate decay, in number of epochs')
@@ -24,21 +26,21 @@ cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0.3,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',30,'number of sequences to train on in parallel')
 cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
-cmd:option('-max_epochs',100000,'number of full passes through the training data')
+cmd:option('-max_epochs',200000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-target_q',3000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
+cmd:option('-target_q',5000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 2e-3, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('-greedy_ep_endEpisode', 30000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-greedy_ep_endEpisode', 100000, 'End point of training and epsilon greedy sampling.')
 cmd:option('-write_every', 200, 'Frequency of writing models into files.')
 cmd:option('-train_count', 1, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
@@ -52,7 +54,7 @@ opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
 
 local _, RlenvGame = pcall(require, opt.RL_env)
-local ConvLSTM = require 'model.ConvLSTM'
+local LSTM_model = require 'model.LSTM'
 local model_utils = require 'util.model_utils'
 
 --- Initialise and start environment
@@ -60,16 +62,17 @@ local env = RlenvGame({level = opt.game_level, render = true, zoom = 10})
 local actionSpace = env:getActionSpace()
 local num_actions = actionSpace['n']    -- number of optinal actions in this environment
 local stateSpace = env:getStateSpace()
+local stateFeaturesInOneDim = stateSpace['shape'][1]*stateSpace['shape'][2]*stateSpace['shape'][3]  -- State feature size in one dimension
 local game_actions = torch.Tensor(num_actions)
 for aci=1, num_actions do
     game_actions[aci] = (aci-1)
 end
 
---- The Convolution Layer Setting
-convArgs = {}
-convArgs.inputDim = stateSpace['shape']     -- input image dimension
-local _, convSet = pcall(require, opt.convnet_set)
-convSet(convArgs)   -- Call the function() in convnet_rlenv1
+----- The Convolution Layer Setting
+--convArgs = {}
+--convArgs.inputDim = stateSpace['shape']     -- input image dimension
+--local _, convSet = pcall(require, opt.convnet_set)
+--convSet(convArgs)   -- Call the function() in convnet_rlenv1
 
 local reward, terminal
 local episodes, totalReward = 0, 0
@@ -118,13 +121,13 @@ if string.len(opt.init_from) > 0 then
     do_random_init = false
 else
     print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
-    -- ConvLSTM model
+    -- LSTM_model model
     protos = {}
-    protos.rnn = ConvLSTM.convlstm(num_actions, opt.rnn_size, opt.num_layers, opt.dropout, convArgs)
+    protos.rnn = LSTM_model.lstm(stateFeaturesInOneDim, num_actions, opt.rnn_size, opt.num_layers, opt.dropout)
 end
 
 -- graph.dot(protos.rnn.fg, 'MLP', 'outputBasename') -- The generated nn graph has been checked, which seems correct!
-print("ConvLSTM Constructed!")
+print("LSTM Constructed!")
 
 --- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
@@ -242,13 +245,13 @@ local trms_train
 if opt.batch_block > 0 then
     -- if batch_block mode is on, all tensors will be tripled to contain
     -- normal observation, all positive observation, and all negative observations.
-    obs_train = torch.zeros(rlTrajLength, batchSize * 3, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    obs_train = torch.zeros(rlTrajLength, batchSize * 3, stateFeaturesInOneDim)  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
     acts_train = torch.LongTensor(rlTrajLength, batchSize * 3, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
     rwds_train = torch.zeros(rlTrajLength, batchSize * 3, 1)
-    trms_train = torch.ByteTensor(rlTrajLength, batchSize * 3, 1):fill(1)
+    trms_train = torch.ByteTensor(rlTrajLength, batchSize * 3, 1):fill(1)   -- value 1 means termination
 else
     -- Otherwise, we only store normal observation.
-    obs_train = torch.zeros(rlTrajLength, batchSize, unpack(stateSpace['shape']))  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
+    obs_train = torch.zeros(rlTrajLength, batchSize, stateFeaturesInOneDim)  --curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3])
     acts_train = torch.LongTensor(rlTrajLength, batchSize, 1):fill(1) -- Attention: the stored action is the index of those actions in the output layer of the NN, not the real action # sent to the simulator
     rwds_train = torch.zeros(rlTrajLength, batchSize, 1)
     trms_train = torch.ByteTensor(rlTrajLength, batchSize, 1):fill(1)
@@ -297,8 +300,7 @@ function generate_trajectory()
     if ep_iter == 0 then ep_iter = batchSize end
 
     for time_iter = 1, rlTrajLength do
-        local one_entity_obs = torch.Tensor(1, curr_observ:size()[1], curr_observ:size()[2], curr_observ:size()[3]) -- A 1-entity sized batch of observation
-        one_entity_obs[1] = curr_observ -- Set the current observation to this 1-sized batch. observ is a 3-dim tensor
+        local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
         local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
         one_entity_rnn_state[time_iter] = {}
         -- add up hidden/candidate states output into the one_entity_rnn_state
@@ -319,12 +321,12 @@ function generate_trajectory()
 
         -- store these observations into training tensors
         if opt.gpuid >= 0 then
-            obs[time_iter][ep_iter] = curr_observ:clone():float():cuda()
+            obs[time_iter][ep_iter] = one_entity_obs:float():cuda()
             acts[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
             rwds[time_iter][ep_iter] = curr_reward
             trms[time_iter][ep_iter] = curr_terminal
         else
-            obs[time_iter][ep_iter] = curr_observ
+            obs[time_iter][ep_iter] = one_entity_obs
             acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
             rwds[time_iter][ep_iter] = curr_reward
             trms[time_iter][ep_iter] = curr_terminal
@@ -422,7 +424,7 @@ function feval(network_param)
         local current_Q = torch.Tensor(predict_Q_values[t]:size(1), 1)     -- It should be the size of batch_size
 
         for i=1, predict_Q_values[t]:size(1) do     -- for each entity in one batch
-        current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
+            current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
         end                                         -- current_Q is a 1-dim tensor
 
         if opt.gpuid >= 0 then
@@ -440,14 +442,14 @@ function feval(network_param)
         dloss_dy[t] = torch.zeros(obs_train[t]:size(1), game_actions:size(1))   -- dim: batch_size * action_num
 
         if opt.gpuid >= 0 then -- ship the input arrays to GPU
-        -- have to convert to float because integers can't be cuda()'d
-        dloss_dy[t] = dloss_dy[t]:float():cuda()
+            -- have to convert to float because integers can't be cuda()'d
+            dloss_dy[t] = dloss_dy[t]:float():cuda()
         end
 
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-        dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
+            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
     end
 
