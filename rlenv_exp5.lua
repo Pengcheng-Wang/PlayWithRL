@@ -14,10 +14,9 @@ require 'lfs'
 require 'util.misc'
 
 cmd = torch.CmdLine()
-cmd:option('-rnn_size', 512, 'size of LSTM internal state')
-cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-rnn_conf', 'rlrnn_conf_rlenv5', 'The RNN layers configuration.')
 cmd:option('-model', 'lstm', 'lstm, gru or rnn')
+cmd:option('-exp_mem_size',100000, 'Experience replay memory size')
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
 cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
@@ -25,7 +24,7 @@ cmd:option('-learning_rate_decay_freq',1000,'frequency of learning rate decay, i
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0.2,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
 cmd:option('-batch_size',30,'number of sequences to train on in parallel')
-cmd:option('-batch_block',3,'number of batch blocks in training tensor.')
+cmd:option('-batch_block',0,'number of batch blocks in training tensor.')   -- 0 means does not duplicate either positive or negative trajectories
 cmd:option('-max_epochs',200000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
@@ -75,7 +74,7 @@ end
 --convSet(convArgs)   -- Call the function() in convnet_rlenv1
 
 --- Configure RNN
-rnnConf = {}
+rnnConf = {}    -- In this table, numbers of neurons in each rnn layer are stored, e.g., {512, 256}
 local _, rnnConfiger = pcall(require, opt.rnn_conf)
 rnnConfiger(rnnConf)
 
@@ -114,25 +113,23 @@ end
 --- define the model: prototypes for one timestep, then clone them in time
 local do_random_init = true
 if string.len(opt.init_from) > 0 then
-    print('loading a model from checkpoint ' .. opt.init_from)
+    print('Loading a model from checkpoint ' .. opt.init_from)
     local checkpoint = torch.load(opt.init_from)
     protos = checkpoint.protos
     -- overwrite model settings based on checkpoint to ensure compatibility
-    print('overwriting rnn_size=' .. checkpoint.opt.rnn_size .. ', num_layers=' .. checkpoint.opt.num_layers .. ', model=' .. checkpoint.opt.model .. ' based on the checkpoint.')
-    opt.rnn_size = checkpoint.opt.rnn_size
-    opt.num_layers = checkpoint.opt.num_layers
+    print('Overwriting rnn_conf=' .. unpack(rnnConf) .. ', model=' .. checkpoint.opt.model .. ' based on the checkpoint.')  -- Here this opt.model is a string indicating type of rnn
     opt.model = checkpoint.opt.model
-    opt.dropout = checkpoint.opt.dropout
+    opt.dropout = checkpoint.opt.dropout    -- The dropout setting has been fixed when rnn is constructed
     do_random_init = false
 else
-    print('creating an ' .. opt.model .. ' with ' .. opt.num_layers .. ' layers')
+    print('Creating an ' .. opt.model .. ' with ' .. #rnnConf .. ' layers')
     -- LSTM_model model
     protos = {}
-    protos.rnn = LSTM_model.lstm(stateFeaturesInOneDim, num_actions, opt.rnn_size, opt.num_layers, opt.dropout)
+    protos.rnn = LSTM_model.lstm(stateFeaturesInOneDim, num_actions, rnnConf, opt.dropout)
 end
 
 -- graph.dot(protos.rnn.fg, 'MLP', 'outputBasename') -- The generated nn graph has been checked, which seems correct!
-print("LSTM Constructed!")
+print("NN Constructed!")
 
 --- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
@@ -178,12 +175,12 @@ end
 
 --- initialize the LSTM forget gates with slightly higher biases to encourage remembering in the beginning
 if opt.model == 'lstm' then
-    for layer_idx = 1, opt.num_layers do
+    for layer_idx = 1, #rnnConf do
         for _,node in ipairs(protos.rnn.forwardnodes) do
             if node.data.annotations.name == "i2h_" .. layer_idx then
-                print('setting forget gate biases to 1 in LSTM layer ' .. layer_idx)
+                print('Setting forget gate biases to 1 in LSTM layer ' .. layer_idx)
                 -- the gates are, in order, i,f,o,g, so f is the 2nd block of weights. Size of bias values equals to 4 * rnn_size for each hidden layer. We have one bias for i, f, o gates and the g (candidate hidden).
-                node.data.module.bias[{{opt.rnn_size+1, 2*opt.rnn_size}}]:fill(1.0)
+                node.data.module.bias[{{rnnConf[layer_idx]+1, 2*rnnConf[layer_idx]}}]:fill(1.0)
             end
         end
     end
@@ -193,15 +190,15 @@ end
 init_state = {}
 init_state_onetraj = {}
 init_state_onetraj_cpu = {}
-for L=1,opt.num_layers do
+for L=1, #rnnConf do
     local h_init
     if opt.batch_block > 0 then
-        h_init = torch.zeros(batchSize * 3, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+        h_init = torch.zeros(batchSize * 3, rnnConf[L])    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     else
-        h_init = torch.zeros(batchSize, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+        h_init = torch.zeros(batchSize, rnnConf[L])    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     end
-    local h_init_traj = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
-    local h_init_traj_cpu = torch.zeros(1, opt.rnn_size)    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    local h_init_traj = torch.zeros(1, rnnConf[L])    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
+    local h_init_traj_cpu = torch.zeros(1, rnnConf[L])    -- This table init_state has the dimension of (# of seqs * # of hidden neurons). So, this table should be used to store the hidden layer value in RNN/GRU, and both cell state and hidden state values in LSTM at previous time step (if it is not only used to represent the initial hidden/cell layer states). This is the reason why LSTM has doubled memory space for init_state.
     if opt.gpuid >=0 then
         h_init = h_init:float():cuda()
         h_init_traj = h_init_traj:float():cuda()
@@ -241,7 +238,103 @@ function set_target_q_network()
 end
 set_target_q_network()  -- Call it for target Q function initialization
 
+--- Followings are tensors used by experience replay memory
+local obs_exp_mem
+local acts_exp_mem
+local rwds_exp_mem
+local trms_exp_mem
 
+obs_exp_mem = torch.zeros(rlTrajLength, opt.exp_mem_size, stateFeaturesInOneDim)
+acts_exp_mem = torch.LongTensor(rlTrajLength, opt.exp_mem_size, 1):fill(1)
+rwds_exp_mem = torch.zeros(rlTrajLength, opt.exp_mem_size, 1)
+trms_exp_mem = torch.ByteTensor(rlTrajLength, opt.exp_mem_size, 1):fill(1)
+
+local exp_mem_full = false
+--- Use this function to generate trajectories for training
+function fill_exp_mem()
+    -- In simple RL environments like Catch, rlTrajLength is a fixed number (24 in Catch).
+    local curr_observ
+    local curr_reward
+    local curr_terminal
+
+    local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one entity(trajectory), since each entity in one batch will be conducted serially.
+    -- No parallelization is set for this data generation step, since we have not
+    -- used multiple threads to run the atari simulator. Is it possible to use
+    -- the asychronous methods, like A3C here? That will be interesting to see.
+    curr_observ = env:start()
+    curr_reward = 0
+    curr_terminal = 0   -- We assume each trajectory will not terminate instantly after initialization
+
+    local cpu_proto_smpl = {}
+    if opt.gpuid >= 0 then
+        for name,proto in pairs(protos) do
+            cpu_proto_smpl[name] = proto:clone():double()
+        end
+    else
+        cpu_proto_smpl = protos
+    end
+    cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
+
+    local ep_iter = sample_iter % opt.exp_mem_size
+    if ep_iter == 0 then
+        ep_iter = opt.exp_mem_size
+        exp_mem_full = true
+    end
+
+    for time_iter = 1, rlTrajLength do
+        local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
+        local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+        one_entity_rnn_state[time_iter] = {}
+        -- add up hidden/candidate states output into the one_entity_rnn_state
+        for hid_iter = 1, #init_state_onetraj_cpu do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
+        local Q_predict = lst[#lst]
+        local act_maxq_index
+        _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
+
+        --- epsilon-greedy
+        local greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
+                (opt.greedy_ep_endEpisode - math.max(0, sample_iter - opt.greedy_ep_startEpisode)) / opt.greedy_ep_endEpisode))
+        -- Epsilon greedy
+        if torch.uniform() < greedy_ep then
+            act_maxq_index[1][1] = torch.random(1, num_actions)
+        end
+
+        local act_in_env = game_actions[act_maxq_index[1][1]]   -- act_maxq_index is a 2-dim tensor
+
+        -- store these observations into training tensors
+        -- Attention: Experience replay buffer memory should not be claimed as in cuda memory. Only training traj should be in cuda memory, if necessary.
+        obs_exp_mem[time_iter][ep_iter] = one_entity_obs
+        acts_exp_mem[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+        rwds_exp_mem[time_iter][ep_iter] = curr_reward
+        trms_exp_mem[time_iter][ep_iter] = curr_terminal
+
+        totalReward = totalReward + curr_reward
+
+        env:render()
+
+        if curr_terminal == 1 then
+            break
+        end
+        --- Advance to the next step
+        curr_reward, curr_observ, curr_terminal = env:step(act_in_env)  -- act_in_env in rlenvs environment starts its index from 0
+
+        if curr_terminal then   -- the terminal signal given from rlenv is a bool. Transfer it into an integer
+            curr_terminal = 1
+            -- Here, I made some changes which modified the rlenv setting.
+            if curr_reward == 0 then
+                curr_reward = -1    -- If game terminates, and play does not succeed, then give reward of -1.
+            end
+        else
+            curr_terminal = 0
+        end
+
+    end
+
+    episodes = episodes + 1
+end
+
+
+--- Followings are tensors used for storing trajectories feed into the training process.
 local obs_train
 local acts_train
 local rwds_train
@@ -271,17 +364,12 @@ local batch_neg_block_iter = 2 * batchSize + 1
 local batch_pos_block_full = false
 local batch_neg_block_full = false
 --- Use this function to generate trajectories for training
-function generate_trajectory()
+function fill_train_buffer()    -- Todo: pwang8. Dec 27. Time to set up sampling from exp memory.
     -- Here we assume observations are 3-dim images.
     -- In simple RL environments like Catch, rlTrajLength is a fixed number.
     local curr_observ
     local curr_reward
     local curr_terminal
-    -- Construct one batch of observations, actions, rewards, and terminal signals.
-    local obs = obs_train
-    local acts = acts_train
-    local rwds = rwds_train
-    local trms = trms_train
 
     local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one entity(trajectory), since each entity in one batch will be conducted serially.
     -- No parallelization is set for this data generation step, since we have not
@@ -326,15 +414,15 @@ function generate_trajectory()
 
         -- store these observations into training tensors
         if opt.gpuid >= 0 then
-            obs[time_iter][ep_iter] = one_entity_obs:float():cuda()
-            acts[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds[time_iter][ep_iter] = curr_reward
-            trms[time_iter][ep_iter] = curr_terminal
+            obs_train[time_iter][ep_iter] = one_entity_obs:float():cuda()
+            acts_train[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+            rwds_train[time_iter][ep_iter] = curr_reward
+            trms_train[time_iter][ep_iter] = curr_terminal
         else
-            obs[time_iter][ep_iter] = one_entity_obs
-            acts[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds[time_iter][ep_iter] = curr_reward
-            trms[time_iter][ep_iter] = curr_terminal
+            obs_train[time_iter][ep_iter] = one_entity_obs
+            acts_train[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+            rwds_train[time_iter][ep_iter] = curr_reward
+            trms_train[time_iter][ep_iter] = curr_terminal
         end
 
         totalReward = totalReward + curr_reward
@@ -347,10 +435,10 @@ function generate_trajectory()
                 if curr_reward > 0 then
                     -- If positive reward signal is given, copy this trajectory to the 2nd block
                     for pos_block_time_iter = 1, time_iter do
-                        obs[pos_block_time_iter][batch_pos_block_iter] = obs[pos_block_time_iter][ep_iter]:clone()
-                        acts[pos_block_time_iter][batch_pos_block_iter] = acts[pos_block_time_iter][ep_iter]:clone()
-                        rwds[pos_block_time_iter][batch_pos_block_iter] = rwds[pos_block_time_iter][ep_iter]:clone()
-                        trms[pos_block_time_iter][batch_pos_block_iter] = trms[pos_block_time_iter][ep_iter]:clone()
+                        obs_train[pos_block_time_iter][batch_pos_block_iter] = obs_train[pos_block_time_iter][ep_iter]:clone()
+                        acts_train[pos_block_time_iter][batch_pos_block_iter] = acts_train[pos_block_time_iter][ep_iter]:clone()
+                        rwds_train[pos_block_time_iter][batch_pos_block_iter] = rwds_train[pos_block_time_iter][ep_iter]:clone()
+                        trms_train[pos_block_time_iter][batch_pos_block_iter] = trms_train[pos_block_time_iter][ep_iter]:clone()
                     end
                     batch_pos_block_iter = batch_pos_block_iter + 1
                     if batch_pos_block_iter > 2 * batchSize then
@@ -360,10 +448,10 @@ function generate_trajectory()
                 else
                     -- otherwise, copy this trajectory to the 3rd block
                     for neg_block_time_iter = 1, time_iter do
-                        obs[neg_block_time_iter][batch_neg_block_iter] = obs[neg_block_time_iter][ep_iter]:clone()
-                        acts[neg_block_time_iter][batch_neg_block_iter] = acts[neg_block_time_iter][ep_iter]:clone()
-                        rwds[neg_block_time_iter][batch_neg_block_iter] = rwds[neg_block_time_iter][ep_iter]:clone()
-                        trms[neg_block_time_iter][batch_neg_block_iter] = trms[neg_block_time_iter][ep_iter]:clone()
+                        obs_train[neg_block_time_iter][batch_neg_block_iter] = obs_train[neg_block_time_iter][ep_iter]:clone()
+                        acts_train[neg_block_time_iter][batch_neg_block_iter] = acts_train[neg_block_time_iter][ep_iter]:clone()
+                        rwds_train[neg_block_time_iter][batch_neg_block_iter] = rwds_train[neg_block_time_iter][ep_iter]:clone()
+                        trms_train[neg_block_time_iter][batch_neg_block_iter] = trms_train[neg_block_time_iter][ep_iter]:clone()
                     end
                     batch_neg_block_iter = batch_neg_block_iter + 1
                     if batch_neg_block_iter > 3 * batchSize then
@@ -512,12 +600,12 @@ end
 --- Fill in the data set
 if opt.batch_block > 0 then
     while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
-        generate_trajectory()   -- Each time only one trajectory was generated
+        fill_train_buffer()   -- Each time only one trajectory was generated
         sample_iter = sample_iter + 1
     end
 else
     while sample_iter<batchSize do
-        generate_trajectory()   -- Each time only one trajectory was generated
+        fill_train_buffer()   -- Each time only one trajectory was generated
         sample_iter = sample_iter + 1
     end
 end
@@ -525,7 +613,7 @@ print('Training starts after sample iterations of :', sample_iter)
 
 while sample_iter<=opt.max_epochs do
 
-    generate_trajectory()   -- Each time only one trajectory was generated
+    fill_train_buffer()   -- Each time only one trajectory was generated
 
     local loss_t
     local timer = torch.Timer()
@@ -562,6 +650,7 @@ while sample_iter<=opt.max_epochs do
         checkpoint.protos = protos
         checkpoint.opt = opt
         checkpoint.sample_iter = sample_iter
+        checkpoint.rnnConf = rnnConf
         torch.save(savefile, checkpoint)
     end
 
