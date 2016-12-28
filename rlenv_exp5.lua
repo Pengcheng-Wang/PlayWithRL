@@ -49,7 +49,7 @@ cmd:option('-convnet_set', 'convnet_rlenv1', 'The CNN layers (under RNN) setting
 cmd:option('-print_freq',50,'frequency of printing result on screen')
 cmd:option('-gc_freq',50,'frequency of invoking garbage collection')
 cmd:option('-q_update_freq',2,'frequency of invoking garbage collection')
-cmd:option('-learn_start',10000,'learning will start after this number of iteration')
+cmd:option('-learn_start',5000,'learning will start after this number of iteration')
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
@@ -561,7 +561,6 @@ while sample_iter<=opt.max_epochs do
     fill_exp_mem()
 
     if sample_iter > opt.learn_start then
-        print('### start learning')
         local loss_t
 
         if sample_iter % opt.q_update_freq == 0 then
