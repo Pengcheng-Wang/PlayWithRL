@@ -19,27 +19,27 @@ cmd:option('-model', 'lstm', 'lstm, gru or rnn')
 cmd:option('-exp_mem_size',100000, 'Experience replay memory size')
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay',0.97,'learning rate decay')
-cmd:option('-learning_rate_decay_after',2000,'in number of epochs, when to start decaying the learning rate')
-cmd:option('-learning_rate_decay_freq',1000,'frequency of learning rate decay, in number of epochs')
+cmd:option('-learning_rate_decay_after',4000,'in number of epochs, when to start decaying the learning rate')
+cmd:option('-learning_rate_decay_freq',2000,'frequency of learning rate decay, in number of epochs')
 cmd:option('-decay_rate',0.95,'decay rate for rmsprop')
 cmd:option('-dropout',0.2,'dropout for regularization, used after each RNN hidden layer. 0 = no dropout')
-cmd:option('-batch_size',30,'number of sequences to train on in parallel')
+cmd:option('-batch_size',32,'number of sequences to train on in parallel')
 cmd:option('-batch_block',0,'number of batch blocks in training tensor.')   -- 0 means does not duplicate either positive or negative trajectories
-cmd:option('-max_epochs',200000,'number of full passes through the training data')
+cmd:option('-max_epochs',500000,'number of full passes through the training data')
 cmd:option('-grad_clip',5,'clip gradients at this value')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
-cmd:option('-target_q',5000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
+cmd:option('-target_q',8000,'The frequency to update target Q network. Set it to 0 if target Q is not needed.')
 cmd:option('-rl_discount', 0.99, 'Discount factor in reinforcement learning environment.')
 cmd:option('-clip_delta', 1, 'Clip delta in Q updating.')
 cmd:option('-L2_weight', 2e-3, 'Weight of derivative of L2 norm item.')
 cmd:option('-greedy_ep_start', 1.0, 'The starting value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_end', 0.1, 'The ending value of epsilon in ep-greedy.')
 cmd:option('-greedy_ep_startEpisode', 1, 'Starting point of training and epsilon greedy sampling.')
-cmd:option('-greedy_ep_endEpisode', 100000, 'End point of training and epsilon greedy sampling.')
+cmd:option('-greedy_ep_endEpisode', 150000, 'End point of training and epsilon greedy sampling.')
 cmd:option('-write_every', 200, 'Frequency of writing models into files.')
 cmd:option('-train_count', 1, 'Number of trainings conducted after each sampling.')
 cmd:option('-RL_env', 'rlenvs.Catch', 'The name of rlenv environment.')
@@ -48,6 +48,8 @@ cmd:option('-traj_length', 0, 'The max trajectory length in training an RNN. Set
 cmd:option('-convnet_set', 'convnet_rlenv1', 'The CNN layers (under RNN) setting.')
 cmd:option('-print_freq',50,'frequency of printing result on screen')
 cmd:option('-gc_freq',50,'frequency of invoking garbage collection')
+cmd:option('-q_update_freq',2,'frequency of invoking garbage collection')
+cmd:option('-learn_start',10000,'learning will start after this number of iteration')
 
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
@@ -109,7 +111,6 @@ end
 --- make sure output directory exists
 --if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
--- Todo: pwang8. Dec26. Should apply LstmReg and Experience replay next. ER should be really important! Should help converge!!!
 --- define the model: prototypes for one timestep, then clone them in time
 local do_random_init = true
 if string.len(opt.init_from) > 0 then
@@ -231,7 +232,9 @@ function set_target_q_network()
         for k, v in pairs(protos) do
             target_protos[k] = v:clone()
             if opt.gpuid >= 0 then
-                target_protos[k]:float():cuda()
+                target_protos[k] = v:clone():float():cuda()
+            else
+                target_protos[k] = v:clone()
             end
         end
     end
@@ -249,7 +252,8 @@ acts_exp_mem = torch.LongTensor(rlTrajLength, opt.exp_mem_size, 1):fill(1)
 rwds_exp_mem = torch.zeros(rlTrajLength, opt.exp_mem_size, 1)
 trms_exp_mem = torch.ByteTensor(rlTrajLength, opt.exp_mem_size, 1):fill(1)
 
-local exp_mem_full = false
+local exp_mem_ptr = 1
+local greedy_ep
 --- Use this function to generate trajectories for training
 function fill_exp_mem()
     -- In simple RL environments like Catch, rlTrajLength is a fixed number (24 in Catch).
@@ -275,10 +279,9 @@ function fill_exp_mem()
     end
     cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
 
-    local ep_iter = sample_iter % opt.exp_mem_size
-    if ep_iter == 0 then
-        ep_iter = opt.exp_mem_size
-        exp_mem_full = true
+    exp_mem_ptr = sample_iter % opt.exp_mem_size
+    if exp_mem_ptr == 0 then
+        exp_mem_ptr = opt.exp_mem_size
     end
 
     for time_iter = 1, rlTrajLength do
@@ -292,7 +295,7 @@ function fill_exp_mem()
         _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
 
         --- epsilon-greedy
-        local greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
+        greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
                 (opt.greedy_ep_endEpisode - math.max(0, sample_iter - opt.greedy_ep_startEpisode)) / opt.greedy_ep_endEpisode))
         -- Epsilon greedy
         if torch.uniform() < greedy_ep then
@@ -303,10 +306,10 @@ function fill_exp_mem()
 
         -- store these observations into training tensors
         -- Attention: Experience replay buffer memory should not be claimed as in cuda memory. Only training traj should be in cuda memory, if necessary.
-        obs_exp_mem[time_iter][ep_iter] = one_entity_obs
-        acts_exp_mem[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-        rwds_exp_mem[time_iter][ep_iter] = curr_reward
-        trms_exp_mem[time_iter][ep_iter] = curr_terminal
+        obs_exp_mem[time_iter][exp_mem_ptr] = one_entity_obs
+        acts_exp_mem[time_iter][exp_mem_ptr] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
+        rwds_exp_mem[time_iter][exp_mem_ptr] = curr_reward
+        trms_exp_mem[time_iter][exp_mem_ptr] = curr_terminal
 
         totalReward = totalReward + curr_reward
 
@@ -364,121 +367,63 @@ local batch_neg_block_iter = 2 * batchSize + 1
 local batch_pos_block_full = false
 local batch_neg_block_full = false
 --- Use this function to generate trajectories for training
-function fill_train_buffer()    -- Todo: pwang8. Dec 27. Time to set up sampling from exp memory.
-    -- Here we assume observations are 3-dim images.
-    -- In simple RL environments like Catch, rlTrajLength is a fixed number.
-    local curr_observ
-    local curr_reward
-    local curr_terminal
+function fill_train_buffer()
+    local rand_smp_index =  torch.LongTensor(batchSize)
+    local exp_smp_count = opt.exp_mem_size
+    if sample_iter < opt.exp_mem_size then exp_smp_count = exp_mem_ptr end
+    assert(batchSize < exp_smp_count, 'Exception: experience replay memory should have more samples than number of batch size.')
+    rand_smp_index:random(1, exp_smp_count) -- Get trajectory sampling indices
 
-    local one_entity_rnn_state = {[0] = init_state_onetraj_cpu}    -- only need one entity(trajectory), since each entity in one batch will be conducted serially.
-    -- No parallelization is set for this data generation step, since we have not
-    -- used multiple threads to run the atari simulator. Is it possible to use
-    -- the asychronous methods, like A3C here? That will be interesting to see.
-    curr_observ = env:start()
-    curr_reward = 0
-    curr_terminal = 0   -- We assume each trajectory will not terminate instantly after initialization
-
-    local cpu_proto_smpl = {}
-    if opt.gpuid >= 0 then
-        for name,proto in pairs(protos) do
-            cpu_proto_smpl[name] = proto:clone():double()
+    for smp_time_iter = 1, rlTrajLength do
+        for smp_traj_iter = 1, batchSize do
+            obs_train[smp_time_iter][smp_traj_iter] = obs_exp_mem[smp_time_iter][rand_smp_index[smp_traj_iter]]
+            acts_train[smp_time_iter][smp_traj_iter] = acts_exp_mem[smp_time_iter][rand_smp_index[smp_traj_iter]]
+            rwds_train[smp_time_iter][smp_traj_iter] = rwds_exp_mem[smp_time_iter][rand_smp_index[smp_traj_iter]]
+            trms_train[smp_time_iter][smp_traj_iter] = trms_exp_mem[smp_time_iter][rand_smp_index[smp_traj_iter]]
         end
-    else
-        cpu_proto_smpl = protos
     end
-    cpu_proto_smpl.rnn:evaluate()    -- set to evaluatation mode, turn off dropout
 
-    local ep_iter = sample_iter % batchSize
-    if ep_iter == 0 then ep_iter = batchSize end
-
-    for time_iter = 1, rlTrajLength do
-        local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
-        local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
-        one_entity_rnn_state[time_iter] = {}
-        -- add up hidden/candidate states output into the one_entity_rnn_state
-        for hid_iter = 1, #init_state_onetraj do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
-        local Q_predict = lst[#lst]
-        local act_maxq_index
-        _, act_maxq_index = torch.max(Q_predict, 2)     -- 2nd param is 2, meaning to find max value along rows.
-
-        --- epsilon-greedy
-        local greedy_ep = (opt.greedy_ep_end + math.max(0, (opt.greedy_ep_start - opt.greedy_ep_end) *
-                (opt.greedy_ep_endEpisode - math.max(0, sample_iter - opt.greedy_ep_startEpisode)) / opt.greedy_ep_endEpisode))
-        -- Epsilon greedy
-        if torch.uniform() < greedy_ep then
-            act_maxq_index[1][1] = torch.random(1, num_actions)
-        end
-
-        local act_in_env = game_actions[act_maxq_index[1][1]]   -- act_maxq_index is a 2-dim tensor
-
-        -- store these observations into training tensors
-        if opt.gpuid >= 0 then
-            obs_train[time_iter][ep_iter] = one_entity_obs:float():cuda()
-            acts_train[time_iter][ep_iter] = act_maxq_index:clone():float():cuda()   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds_train[time_iter][ep_iter] = curr_reward
-            trms_train[time_iter][ep_iter] = curr_terminal
-        else
-            obs_train[time_iter][ep_iter] = one_entity_obs
-            acts_train[time_iter][ep_iter] = act_maxq_index   -- Attention: this stored action is the index of that taken action in the output layer of the NN, not the real action # given to the simulator
-            rwds_train[time_iter][ep_iter] = curr_reward
-            trms_train[time_iter][ep_iter] = curr_terminal
-        end
-
-        totalReward = totalReward + curr_reward
-
-        env:render()
-
-        if curr_terminal == 1 then
-            -- We assume the rl environment setting is as: given an numerical reward when ternimal state is reached
-            if opt.batch_block > 0 then
-                if curr_reward > 0 then
-                    -- If positive reward signal is given, copy this trajectory to the 2nd block
-                    for pos_block_time_iter = 1, time_iter do
-                        obs_train[pos_block_time_iter][batch_pos_block_iter] = obs_train[pos_block_time_iter][ep_iter]:clone()
-                        acts_train[pos_block_time_iter][batch_pos_block_iter] = acts_train[pos_block_time_iter][ep_iter]:clone()
-                        rwds_train[pos_block_time_iter][batch_pos_block_iter] = rwds_train[pos_block_time_iter][ep_iter]:clone()
-                        trms_train[pos_block_time_iter][batch_pos_block_iter] = trms_train[pos_block_time_iter][ep_iter]:clone()
-                    end
-                    batch_pos_block_iter = batch_pos_block_iter + 1
-                    if batch_pos_block_iter > 2 * batchSize then
-                        batch_pos_block_iter = batchSize + 1
-                        batch_pos_block_full = true
-                    end
-                else
-                    -- otherwise, copy this trajectory to the 3rd block
-                    for neg_block_time_iter = 1, time_iter do
-                        obs_train[neg_block_time_iter][batch_neg_block_iter] = obs_train[neg_block_time_iter][ep_iter]:clone()
-                        acts_train[neg_block_time_iter][batch_neg_block_iter] = acts_train[neg_block_time_iter][ep_iter]:clone()
-                        rwds_train[neg_block_time_iter][batch_neg_block_iter] = rwds_train[neg_block_time_iter][ep_iter]:clone()
-                        trms_train[neg_block_time_iter][batch_neg_block_iter] = trms_train[neg_block_time_iter][ep_iter]:clone()
-                    end
-                    batch_neg_block_iter = batch_neg_block_iter + 1
-                    if batch_neg_block_iter > 3 * batchSize then
-                        batch_neg_block_iter = 2 * batchSize + 1
-                        batch_neg_block_full = true
-                    end
+    -- The following part is for purpose of duplicating positive and negative trajectories in training tensors.
+    -- I'm guessing I'll not use this setting in this experiment.
+    if opt.batch_block > 0 then
+        for smp_traj_iter = 1, batchSize do
+            if rwds_train[rlTrajLength][smp_traj_iter] > 0 then
+                -- If positive reward signal is given, copy this trajectory to the 2nd block
+                for pos_block_time_iter = 1, rlTrajLength do
+                    obs_train[pos_block_time_iter][batch_pos_block_iter] = obs_train[pos_block_time_iter][smp_traj_iter]
+                    acts_train[pos_block_time_iter][batch_pos_block_iter] = acts_train[pos_block_time_iter][smp_traj_iter]
+                    rwds_train[pos_block_time_iter][batch_pos_block_iter] = rwds_train[pos_block_time_iter][smp_traj_iter]
+                    trms_train[pos_block_time_iter][batch_pos_block_iter] = trms_train[pos_block_time_iter][smp_traj_iter]
+                end
+                batch_pos_block_iter = batch_pos_block_iter + 1
+                if batch_pos_block_iter > 2 * batchSize then
+                    batch_pos_block_iter = batchSize + 1
+                    batch_pos_block_full = true
+                end
+            else
+                -- otherwise, copy this trajectory to the 3rd block
+                for neg_block_time_iter = 1, rlTrajLength do
+                    obs_train[neg_block_time_iter][batch_neg_block_iter] = obs_train[neg_block_time_iter][smp_traj_iter]
+                    acts_train[neg_block_time_iter][batch_neg_block_iter] = acts_train[neg_block_time_iter][smp_traj_iter]
+                    rwds_train[neg_block_time_iter][batch_neg_block_iter] = rwds_train[neg_block_time_iter][smp_traj_iter]
+                    trms_train[neg_block_time_iter][batch_neg_block_iter] = trms_train[neg_block_time_iter][smp_traj_iter]
+                end
+                batch_neg_block_iter = batch_neg_block_iter + 1
+                if batch_neg_block_iter > 3 * batchSize then
+                    batch_neg_block_iter = 2 * batchSize + 1
+                    batch_neg_block_full = true
                 end
             end
-
-            break
         end
-        --- Advance to the next step
-        curr_reward, curr_observ, curr_terminal = env:step(act_in_env)  -- act_in_env in rlenvs environment starts its index from 0
-
-        if curr_terminal then
-            curr_terminal = 1
-            -- Here, I made some changes which modified the rlenv setting.
-            if curr_reward == 0 then
-                curr_reward = -1    -- If game terminates, and play does not succeed, then give reward of -1.
-            end
-        else
-            curr_terminal = 0
-        end
-
     end
 
-    episodes = episodes + 1
+    if opt.gpuid >= 0 then
+        obs_train = obs_train:clone():float():cuda()
+        acts_train = acts_train:clone():cuda()
+        rwds_train = rwds_train:clone():float():cuda()
+        trms_train = trms_train:clone():cuda()
+    end
+
 end
 
 
@@ -516,10 +461,10 @@ function feval(network_param)
         local delta = rwds_train[t+1]:clone()
         delta:add(target_Q_value)   -- delta == reward + (1-terminal) * discount * Q_max_a(s_t+1, a_t+1). delta is a 2-dim tensor.
 
-        local current_Q = torch.Tensor(predict_Q_values[t]:size(1), 1)     -- It should be the size of batch_size
+        local current_Q = torch.Tensor(predict_Q_values[t]:size(1), 1)     -- It should be the size of batch_size, or batch_size * 3 if opt.batch_block > 0
 
         for i=1, predict_Q_values[t]:size(1) do     -- for each entity in one batch
-        current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
+            current_Q[i] = predict_Q_values[t][i][acts_train[t][i][1]]     -- Get Q values for specific actions taken by agent
         end                                         -- current_Q is a 1-dim tensor
 
         if opt.gpuid >= 0 then
@@ -537,14 +482,14 @@ function feval(network_param)
         dloss_dy[t] = torch.zeros(obs_train[t]:size(1), game_actions:size(1))   -- dim: batch_size * action_num
 
         if opt.gpuid >= 0 then -- ship the input arrays to GPU
-        -- have to convert to float because integers can't be cuda()'d
-        dloss_dy[t] = dloss_dy[t]:float():cuda()
+            -- have to convert to float because integers can't be cuda()'d
+            dloss_dy[t] = dloss_dy[t]:float():cuda()
         end
 
         -- Attention: Here the loss calculation is a little different from DQN code. They use the NEGATIVE derivative directly,
         -- and then add that NEGATIVE derivative. I calculate the normal derivative here.
         for i=1, predict_Q_values[t]:size(1) do     -- Here we are trying to get dloss/dy. We still need to dloss from hidden states calculation to be concatenated together for calculating nn.backward()
-        dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
+            dloss_dy[t][i][acts_train[t][i][1]] = delta[i][1] * -1.0    -- dloss_dy equals to the gradient d(loss)/d(y) based on mean squre error. Gradient is -(y-t)
         end
     end
 
@@ -597,61 +542,81 @@ if opt.gpuid >= 0 then
     trms_train = trms_train:float():cuda()
 end
 
---- Fill in the data set
-if opt.batch_block > 0 then
-    while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
-        fill_train_buffer()   -- Each time only one trajectory was generated
-        sample_iter = sample_iter + 1
-    end
-else
-    while sample_iter<batchSize do
-        fill_train_buffer()   -- Each time only one trajectory was generated
-        sample_iter = sample_iter + 1
-    end
-end
-print('Training starts after sample iterations of :', sample_iter)
+----- Fill in the data set
+--if opt.batch_block > 0 then
+--    while sample_iter<batchSize or not batch_pos_block_full or not batch_neg_block_full do
+--        fill_train_buffer()   -- Each time only one trajectory was generated
+--        sample_iter = sample_iter + 1
+--    end
+--else
+--    while sample_iter<batchSize do
+--        fill_train_buffer()   -- Each time only one trajectory was generated
+--        sample_iter = sample_iter + 1
+--    end
+--end
+--print('Training starts after sample iterations of :', sample_iter)
 
 while sample_iter<=opt.max_epochs do
 
-    fill_train_buffer()   -- Each time only one trajectory was generated
+    fill_exp_mem()
 
-    local loss_t
-    local timer = torch.Timer()
-    for itr=1, opt.train_count do
-        _, loss_t = optim.rmsprop(feval, params, optim_state)
-    end
-    local time = timer:time().real
+    if sample_iter > opt.learn_start then
+        print('### start learning')
+        local loss_t
 
-    if sample_iter % opt.print_freq == 0 then
-        local train_loss = loss_t[1][1]
-        print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, loss: %.6f, time: %d:%d:%d ", sample_iter, rwds_train:sum(),
-            grad_params:norm()/params:norm(), train_loss, os.date('*t')['hour'], os.date('*t')['min'], os.date('*t')['sec']))
-    end
+        if sample_iter % opt.q_update_freq == 0 then
+            fill_train_buffer()
+            -- Add the following, but not use
+            if opt.batch_block > 0 then
+                while not batch_pos_block_full or not batch_neg_block_full do
+                    fill_train_buffer()
+                    print('### Filling duplicated buffers')
+                end
+            end
 
-    -- exponential learning rate decay
-    if sample_iter % opt.learning_rate_decay_freq == 0 and opt.learning_rate_decay < 1 then
-        if sample_iter >= opt.learning_rate_decay_after then
-            local decay_factor = opt.learning_rate_decay
-            optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
-            print('decayed learning rate by a factor ' .. decay_factor .. ' to ' .. optim_state.learningRate)
+            for itr=1, opt.train_count do
+                _, loss_t = optim.rmsprop(feval, params, optim_state)
+            end
+
         end
-    end
 
-    if opt.target_q > 0 and sample_iter % opt.target_q == 0 then
-        set_target_q_network()
-        print('Reset target Q function')
-    end
+        local tem_rewards = 0
+        if sample_iter % opt.print_freq == 0 then
+            local train_loss = loss_t[1][1]
+            for i = 0, 49 do
+                local pst = (exp_mem_ptr - i) % opt.exp_mem_size
+                if pst == 0 then pst = opt.exp_mem_size end
+                tem_rewards = tem_rewards + rwds_exp_mem[rlTrajLength][pst][1]
+            end
+            print(string.format("Iter: %d, rwd: %.1f, grad/param: %.4f, loss: %.6f, ep: %.4f, time: %d:%d:%d ", sample_iter, tem_rewards,
+                grad_params:norm()/params:norm(), train_loss, greedy_ep, os.date('*t')['hour'], os.date('*t')['min'], os.date('*t')['sec']))
+        end
 
-    -- every now and then or on last iteration
-    if sample_iter % opt.write_every == 0 or sample_iter == opt.max_epochs then
-        local savefile = string.format('%s/%d_%s_epoch%d_%.1f.t7', opt.checkpoint_dir, os.time()%1000, opt.savefile, sample_iter, rwds_train:sum())
-        print('saving checkpoint to ' .. savefile)
-        local checkpoint = {}
-        checkpoint.protos = protos
-        checkpoint.opt = opt
-        checkpoint.sample_iter = sample_iter
-        checkpoint.rnnConf = rnnConf
-        torch.save(savefile, checkpoint)
+        -- exponential learning rate decay
+        if sample_iter % opt.learning_rate_decay_freq == 0 and opt.learning_rate_decay < 1 then
+            if (sample_iter-opt.learn_start) >= opt.learning_rate_decay_after then
+                local decay_factor = opt.learning_rate_decay
+                optim_state.learningRate = optim_state.learningRate * decay_factor -- decay it
+                print('decayed learning rate by a factor ' .. decay_factor .. ' to ' .. optim_state.learningRate)
+            end
+        end
+
+        if opt.target_q > 0 and sample_iter % opt.target_q == 0 then
+            set_target_q_network()
+            print('Reset target Q function')
+        end
+
+        -- every now and then or on last iteration
+        if sample_iter % opt.write_every == 0 or sample_iter == opt.max_epochs then
+            local savefile = string.format('%s/%d_%s_epoch%d_%.1f.t7', opt.checkpoint_dir, os.time()%100000, opt.savefile, sample_iter, tem_rewards)
+            print('saving checkpoint to ' .. savefile)
+            local checkpoint = {}
+            checkpoint.protos = protos
+            checkpoint.opt = opt
+            checkpoint.sample_iter = sample_iter
+            checkpoint.rnnConf = rnnConf
+            torch.save(savefile, checkpoint)
+        end
     end
 
     -- do garbage collection
