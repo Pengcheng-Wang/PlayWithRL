@@ -6,6 +6,7 @@
 --
 
 return function(rnnConf)
-    table.insert(rnnConf, 96)
+--    table.insert(rnnConf, 96)
+    table.insert(rnnConf, 32)
 end
 
