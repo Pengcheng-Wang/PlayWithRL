@@ -292,8 +292,14 @@ function fill_exp_mem()
     end
 
     for time_iter = 1, rlTrajLength do
-        local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
-        local lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+        local lst
+        if #convArgs > 0 then
+            lst = cpu_proto_smpl.rnn:forward({ curr_observ, unpack(one_entity_rnn_state[time_iter-1]) })
+        else
+            local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
+            lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
+        end
+        
         one_entity_rnn_state[time_iter] = {}
         -- add up hidden/candidate states output into the one_entity_rnn_state
         for hid_iter = 1, #init_state_onetraj_cpu do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
