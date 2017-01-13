@@ -80,7 +80,7 @@ convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
 local _, convSet = pcall(require, opt.convnet_set)
 convSet(convArgs)   -- Call the function() in convnet_rlenv1
-print('###', convArgs, '@', #convArgs) os.exit()
+
 --- Configure RNN
 rnnConf = {}    -- In this table, numbers of neurons in each rnn layer are stored, e.g., {512, 256}
 local _, rnnConfiger = pcall(require, opt.rnn_conf)
@@ -293,7 +293,7 @@ function fill_exp_mem()
 
     for time_iter = 1, rlTrajLength do
         local lst
-        if #convArgs > 0 then
+        if next(convArgs) ~= nil then
             lst = cpu_proto_smpl.rnn:forward({ curr_observ, unpack(one_entity_rnn_state[time_iter-1]) })
         else
             local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
