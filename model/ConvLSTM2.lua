@@ -50,8 +50,8 @@ function ConvLSTM2.convlstm(output_size, rnn_size_conf, dropout, convArgs)
             lastConvLayerHeight = math.ceil(((lastConvLayerHeight - convArgs.filterSize[conviter]) / convArgs.filterStride[conviter] + 1 + convArgs.pad[conviter]) / 2)
         else
             convOutputs[conviter] = conv1_nl
-            lastConvLayerWidth = (lastConvLayerWidth - convArgs.filterSize[conviter]) / convArgs.filterStride[conviter] + 1
-            lastConvLayerHeight = (lastConvLayerHeight - convArgs.filterSize[conviter]) / convArgs.filterStride[conviter] + 1
+            lastConvLayerWidth = (lastConvLayerWidth + convArgs.pad[conviter] - convArgs.filterSize[conviter]) / convArgs.filterStride[conviter] + 1
+            lastConvLayerHeight = (lastConvLayerHeight + convArgs.pad[conviter] - convArgs.filterSize[conviter]) / convArgs.filterStride[conviter] + 1
         end
     end
 
