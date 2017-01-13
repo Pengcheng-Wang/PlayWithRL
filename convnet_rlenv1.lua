@@ -7,9 +7,14 @@
 --
 
 return function(convArgs)
-    convArgs.outputChannel = {12, 24, 24}    -- could have multiple layers
-    convArgs.filterSize = {6, 3, 2}     -- In Catch, input are of size 1*24*24.
-    convArgs.filterStride = {3, 2, 1}   -- 12*7*7, 24*3*3, 24*2*2
-    convArgs.pad = {1}
+--    convArgs.outputChannel = {12, 24, 24}    -- could have multiple layers
+--    convArgs.filterSize = {6, 3, 2}     -- In Catch, input are of size 1*24*24.
+--    convArgs.filterStride = {3, 2, 1}   -- 12*7*7, 24*3*3, 24*2*2
+--    convArgs.pad = {1}
+--    convArgs.applyPooling = {false}     -- No pooling
+    convArgs.outputChannel = {32, 32}    -- could have multiple layers
+    convArgs.filterSize = {5, 5}     -- In Catch, input are of size 1*24*24.
+    convArgs.filterStride = {2, 2}   -- 32*11*11, 32*4*4
+    convArgs.pad = {1, 0}
     convArgs.applyPooling = {false}     -- No pooling
 end
