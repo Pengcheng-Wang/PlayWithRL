@@ -80,7 +80,7 @@ convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
 local _, convSet = pcall(require, opt.convnet_set)
 convSet(convArgs)   -- Call the function() in convnet_rlenv1
-
+print('###', convArgs) os.exit()
 --- Configure RNN
 rnnConf = {}    -- In this table, numbers of neurons in each rnn layer are stored, e.g., {512, 256}
 local _, rnnConfiger = pcall(require, opt.rnn_conf)
@@ -299,7 +299,7 @@ function fill_exp_mem()
             local one_entity_obs = nn.Reshape(stateFeaturesInOneDim):forward(curr_observ)
             lst = cpu_proto_smpl.rnn:forward({ one_entity_obs, unpack(one_entity_rnn_state[time_iter-1]) })
         end
-        
+
         one_entity_rnn_state[time_iter] = {}
         -- add up hidden/candidate states output into the one_entity_rnn_state
         for hid_iter = 1, #init_state_onetraj_cpu do table.insert(one_entity_rnn_state[time_iter], lst[hid_iter]) end
