@@ -80,7 +80,7 @@ convArgs = {}
 convArgs.inputDim = stateSpace['shape']     -- input image dimension
 local _, convSet = pcall(require, opt.convnet_set)
 convSet(convArgs)   -- Call the function() in convnet_rlenv1
-print('###', convArgs) os.exit()
+print('###', convArgs, '@', #convArgs) os.exit()
 --- Configure RNN
 rnnConf = {}    -- In this table, numbers of neurons in each rnn layer are stored, e.g., {512, 256}
 local _, rnnConfiger = pcall(require, opt.rnn_conf)
